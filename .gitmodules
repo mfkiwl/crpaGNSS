@@ -1,0 +1,12 @@
+[submodule "libs/navsim"]
+	path = libs/navsim
+	url = git@github.com:navsquad/navsim.git
+	branch = reface
+[submodule "libs/log_utils"]
+	path = libs/log_utils
+	url = git@github.com:sturdivant20/log_utils.py.git
+	branch = master
+[submodule "libs/yaml_parser"]
+	path = libs/yaml_parser
+	url = git@github.com:sturdivant20/yaml_parser.py.git
+	branch = master
