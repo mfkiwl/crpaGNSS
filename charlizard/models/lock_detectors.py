@@ -73,27 +73,28 @@ def CN0_m2m4_estimator(IP: np.ndarray, QP: np.ndarray, cn0: float, T: float) -> 
   """
   # 2nd and 4th moments
   tmp = (IP*IP) + (QP*QP)
-  m_2 = tmp.sum() / IP.size
-  m_4 = (tmp*tmp).sum() / IP.size
+  m_2 = tmp.mean()
+  m_4 = (tmp*tmp).mean()
 
   # signal to noise ratio
   tmp = 2*m_2*m_2 - m_4
   if tmp > 0:
     tmp = np.sqrt(2*m_2*m_2 - m_4)
-  else:
-    tmp = np.abs(IP).sum()**2
+  # else:
+  #   tmp = np.abs(IP).sum()**2
   SNR = tmp / (m_2 - tmp)
 
   # cn0 moving average
-  CN0 = 10*np.log10(SNR/T)
-  cn0 = 0.95*cn0 + 0.05*CN0
+  # CN0 = 10*np.log10(SNR/T)
+  # cn0 = 0.95*cn0 + 0.05*CN0
+  cn0 = 10*np.log10(SNR/T)
 
   return cn0
 
 
 # === CN0_BEAULEUI_ESTIMATOR ===
 @njit(cache=True, fastmath=True)
-def CN0_beaulieu_estimator(IP: np.ndarray, QP: np.ndarray, o_IP: np.ndarray, o_QP: np.ndarray, 
+def CN0_beaulieu_estimator(IP: np.ndarray, QP: np.ndarray, 
                            cn0: float, T: float, phase_track: bool=True) -> float:
   """Beaulieu CN0 estimator, implements moving average filter
 
@@ -116,23 +117,26 @@ def CN0_beaulieu_estimator(IP: np.ndarray, QP: np.ndarray, o_IP: np.ndarray, o_Q
       new CN0 estimate [dB-Hz]
   """
   # account for correlator power without phase lock
+  m = IP.size
+  m_2 = int(m/2)
   if phase_track:
-    prompt = IP
-    prev_prompt = o_IP
+    prompt = IP[m_2:]
+    prev_prompt = IP[:m_2]
   else:
-    prompt = np.sqrt(IP**2 + QP**2)
-    prev_prompt = np.sqrt(o_IP**2 + o_QP**2)
+    prompt = np.sqrt(IP[m_2:]**2 + QP[m_2:]**2)
+    prev_prompt = np.sqrt(IP[:m_2]**2 + QP[:m_2]**2)
   
   # power estimators
   p_d = 0.5 * (prompt**2 + prev_prompt**2)
   p_n = (np.abs(prompt) - np.abs(prev_prompt))**2
 
   # signal to noise ratio
-  SNR = 1 / ((p_n / p_d).sum() / prompt.size)
+  SNR = 1 / ((p_n / p_d).mean())
 
   # cn0 moving average
-  CN0 = 10*np.log10(SNR/T)
-  cn0 = 0.95*cn0 + 0.05*CN0
+  # CN0 = 10*np.log10(SNR/T)
+  # cn0 = 0.95*cn0 + 0.05*CN0
+  cn0 = 10*np.log10(SNR/T)
 
   return cn0
   

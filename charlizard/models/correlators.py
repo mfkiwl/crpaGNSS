@@ -34,9 +34,6 @@ class Correlators:
   
 @dataclass()
 class CorrelatorErrors:
-  pseudorange: np.ndarray
-  pseudorange_rate: np.ndarray
-  carrier_pseudorange: np.ndarray
   chip: np.ndarray
   freq: np.ndarray
   phase: np.ndarray
@@ -97,21 +94,20 @@ def correlator_error(
   CorrelatorErrors
       measurement and tracking errors
   """
-  meas_prange = np.array([emitter.code_pseudorange for emitter in observables.values()])
-  meas_carr_prange = np.array([emitter.carrier_pseudorange for emitter in observables.values()])
-  meas_prange_rate = np.array([emitter.pseudorange_rate for emitter in observables.values()])
   
-  # code errors
-  range_error = meas_prange - est_prange
-  chip_error = range_error / chip_width
+  # code ranging errors
+  chip_error = np.array([(emitter.code_pseudorange - est_prange[i]) / chip_width 
+                            for i,emitter in enumerate(observables.values())])
   
-  # carrier errors
-  range_rate_error = meas_prange_rate - est_prange_rate
-  carrier_range_error = meas_carr_prange - est_prange   # TODO: check this, dirty
-  freq_error = -range_rate_error / wavelength
-  phase_error = carrier_range_error / wavelength
+  # carrier ranging errors # TODO: check this - dirty
+  phase_error = np.array([(emitter.carrier_pseudorange - est_prange[i]) / wavelength 
+                            for i,emitter in enumerate(observables.values())])
   
-  return CorrelatorErrors(range_error, range_rate_error, carrier_range_error, chip_error, freq_error, phase_error)
+  # carrier frequency errors
+  freq_error = np.array([(emitter.pseudorange_rate - est_prange_rate[i]) / -wavelength 
+                            for i,emitter in enumerate(observables.values())])
+  
+  return CorrelatorErrors(chip_error, freq_error, phase_error)
 
 # === correlator_model ===
 # (pg. 386) Position, navigation, and timing technologies in the 21st century - v1
@@ -122,45 +118,44 @@ def correlator_model(err: CorrelatorErrors, cn0: np.ndarray, tau: float, T: floa
   raw_cn0 = 10**(0.1*cn0)
   
   # amplitude
-  p = np.pi * err.freq * T
-  A = np.sqrt(2*raw_cn0*T) * np.sin(p) / p
+  A = np.sqrt(2 * raw_cn0 * T) * np.sinc(np.pi * err.freq * T)
   
   # data bit +/- 1
-  D = 1 # if np.random.random() < 0.5 else -1
+  # D = 1 # if np.random.random() < 0.5 else -1
   
   # autocorrelation
   RE = 1 - np.abs(err.chip + tau)
   RP = 1 - np.abs(err.chip)
   RL = 1 - np.abs(err.chip - tau)
+  RE[RE < 0] = 0.0
+  RP[RP < 0] = 0.0
+  RL[RL < 0] = 0.0
   
-  # linear sub-phase intervals
-  m = 10            # number of phase points
-  subphase_time = T * np.arange(m,0,-1) / m
-  subphase_offset_linear = np.outer(err.freq, subphase_time)
-  subphase_error = err.phase[:,None] - subphase_offset_linear
+  # number of phase points
+  m = 20
+  m_2 = 10
   
-  # subphase carrier replicas
-  inphase = np.cos(p[:,None] + subphase_error)
-  quadrature = np.sin(p[:,None] + subphase_error)
+  # linear frequency error over integration period
+  # subphase_time = T * np.arange(m,0,-1) / m
+  subphase_time = T * np.arange(0,m)[::-1] / m
+  subphase_delta = np.outer(err.freq, subphase_time)
+  subphase_error = err.phase[:,None] - subphase_delta
   
-  # subphase correlators
-  sub_ie = np.array([A[i]*RE[i]*D*inphase[i,:] + np.random.randn(m) for i in range(n)])
-  sub_ip = np.array([A[i]*RP[i]*D*inphase[i,:] + np.random.randn(m) for i in range(n)])
-  sub_il = np.array([A[i]*RL[i]*D*inphase[i,:] + np.random.randn(m) for i in range(n)])
-  sub_qe = np.array([A[i]*RE[i]*D*quadrature[i,:] + np.random.randn(m) for i in range(n)])
-  sub_qp = np.array([A[i]*RP[i]*D*quadrature[i,:] + np.random.randn(m) for i in range(n)])
-  sub_ql = np.array([A[i]*RL[i]*D*quadrature[i,:] + np.random.randn(m) for i in range(n)])
+  # mean errors
+  mean_subphase_error = 2*np.pi * subphase_error.mean(axis=1)
+  mean_half_1_subphase_err = 2*np.pi * subphase_error[:,:m_2].mean(axis=1)
+  mean_half_2_subphase_err = 2*np.pi * subphase_error[:,m_2:].mean(axis=1)
   
   # correlators
-  ip1 = sub_ip[:,:5].sum(axis=1)
-  ip2 = sub_ip[:,5:].sum(axis=1)
-  qp1 = sub_qp[:,:5].sum(axis=1)
-  qp2 = sub_qp[:,5:].sum(axis=1)
-  IE = sub_ie.sum(axis=1)
-  IP = ip1 + ip2
-  IL = sub_il.sum(axis=1)
-  QE = sub_qe.sum(axis=1)
-  QP = qp1 + qp2
-  QL = sub_ql.sum(axis=1)
+  IE = A * RE * np.cos(np.pi * err.freq * T + mean_subphase_error) + np.random.randn(n)
+  IP = A * RP * np.cos(np.pi * err.freq * T + mean_subphase_error) + np.random.randn(n)
+  IL = A * RL * np.cos(np.pi * err.freq * T + mean_subphase_error) + np.random.randn(n)
+  QE = A * RE * np.sin(np.pi * err.freq * T + mean_subphase_error) + np.random.randn(n)
+  QP = A * RP * np.sin(np.pi * err.freq * T + mean_subphase_error) + np.random.randn(n)
+  QL = A * RL * np.sin(np.pi * err.freq * T + mean_subphase_error) + np.random.randn(n)
+  ip1 = A * RP * np.cos(np.pi * err.freq * T/2 + mean_half_1_subphase_err) + np.random.randn(n)/2
+  qp1 = A * RP * np.sin(np.pi * err.freq * T/2 + mean_half_1_subphase_err) + np.random.randn(n)/2
+  ip2 = A * RP * np.cos(np.pi * err.freq * T/2 + mean_half_2_subphase_err) + np.random.randn(n)/2
+  qp2 = A * RP * np.sin(np.pi * err.freq * T/2 + mean_half_2_subphase_err) + np.random.randn(n)/2
   
   return Correlators(IE, IP, IL, QE, QP, QL, ip1, qp1, ip2, qp2)

@@ -1,0 +1,28 @@
+time:
+  duration: 281.98 # [s]
+  # duration: 100.0
+  fsim: 50 # [Hz]
+  year: 2024
+  month: 1
+  day: 31
+  hour: 1
+  minute: 19
+  second: 18
+
+constellations:
+  mask_angle: 10.0 # [deg]
+  emitters:
+    gps:
+      signal: gpsl1ca
+      js: 0.0
+      correlator_model: bpsk
+
+errors:
+  # ionosphere: klobuchar
+  # troposphere: saastamoinen
+  rx_clock: high_quality_tcxo
+
+imu:
+  model: industrial
+  osr: 10
+  mobility: [1.0, 28.5, 114.6]

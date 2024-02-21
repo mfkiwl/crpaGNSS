@@ -37,18 +37,36 @@ class RxCovariance:
 # === Navigator Configs ============================================================================
 @dataclass
 class VDFLLConfig:
+  T: float                        #! integration period [s]
   order: int                      #! 2: constant velocity, 3: constant acceleration
   process_noise_stdev: float      #! x,y,z process noise standard deviation
   tap_spacing: float              #! early,prompt,late correlator tap/chip spacing
   innovation_stdev: float         #! normalized innovation filter threshold
   cn0_buffer_len: int             #! number of correlator outputs to use in cn0 estimation
-  T: float                        #! integration period [s]
   cn0: np.ndarray                 #! initial receiver cn0
   pos: np.ndarray                 #! initial receiver ecef position
   vel: np.ndarray                 #! initial receiver ecef velocity
   clock_bias: np.ndarray          #! initial receiver clock bias
   clock_drift: np.ndarray         #! initial receiver clock drift
   clock_type: str                 #! receiver oscillator type
-  signal_config: SatelliteSignal  #! satellite signal properties
   is_signal_level: bool           #! state if operating at a signal level or correlator level
+  
+@dataclass
+class GNSSINSConfig:
+  T: float                        #! integration period [s]
+  Srg: float                      #! PSD of gyro random noise
+  Sra: float                      #! PSD of accel random noise
+  Sbad: float                     #! PSD of accel bias variation
+  Sbgd: float                     #! PSD of gyro bias variation
+  innovation_stdev: float         #! normalized innovation filter threshold
+  cn0_buffer_len: int             #! number of correlator outputs to use in cn0 estimation
+  cn0: np.ndarray                 #! initial receiver cn0
+  pos: np.ndarray                 #! initial receiver ecef position
+  vel: np.ndarray                 #! initial receiver ecef velocity
+  att: np.ndarray                 #! initial receiver roll, pitch, yaw [deg]
+  clock_bias: np.ndarray          #! initial receiver clock bias
+  clock_drift: np.ndarray         #! initial receiver clock drift
+  clock_type: str                 #! receiver oscillator type
+  # is_opportunistic: bool          #! uses only range rates from FLL
+
   
