@@ -15,7 +15,7 @@
 '''
 
 import numpy as np
-from scipy.linalg import solve_discrete_are, solve_continuous_are
+from scipy.linalg import solve_discrete_are, solve_continuous_are, inv, norm, cholesky
 from log_utils import default_logger as _log
 
 from charlizard.navigators.structures import VDFLLConfig
@@ -30,11 +30,46 @@ from navtools.common import compute_range_and_unit_vector, compute_range_rate
 from navtools.constants import *
 
 # easy conversions
-R2D, D2R = 180 / np.pi, np.pi / 180
-lla_rad2deg = np.array([R2D, R2D, 1.0], dtype=float)
-I3, Z33, Z32, Z23 = np.eye(3), np.zeros((3,3)), np.zeros((3,2)), np.zeros((2,3))
+R2D =  180 / np.pi
+D2R = np.pi / 180
+LLA_R2D = np.array([R2D, R2D, 1.0], dtype=float)
+I3 = np.eye(3)
+Z33 = np.zeros((3,3))
+Z32 = np.zeros((3,2))
+Z23 = np.zeros((2,3))
 
 class VectorTrack:
+  @property
+  def extract_states(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    # update ENU state
+    self.vel = self._C_e_n @ self.rx_state[3:6]
+    self.pos = self._C_e_n @ (self.rx_state[0:3] - self._ecef0)
+    self.lla = ecef2lla(self.rx_state[0:3]) * LLA_R2D
+    self.clk = self.rx_state[-2:]
+    return self.pos, self.vel, self.lla, self.clk
+  
+  @property
+  def extract_stds(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    # extract ENU standard deviations
+    vel = np.sqrt(np.diag(self._C_e_n @ self.rx_cov[3:6,3:6] @ self._C_n_e))
+    pos = np.sqrt(np.diag(self._C_e_n @ self.rx_cov[6:9,6:9] @ self._C_n_e))
+    clk = np.sqrt(np.diag(self.rx_cov[-2:,-2:]))
+    return pos, vel, clk
+  
+  @property
+  def extract_dops(self) -> tuple[float, float, float, float, float, int]:
+    n = self._range_unit_vectors.shape[0]
+    i1 = np.ones(n)
+    H = np.block([self._range_unit_vectors, i1[:,None]])
+    dop = inv(H.T @ H)
+    dop[:3,:3] = self._C_e_n @ dop[:3,:3] @ self._C_n_e
+    gdop = np.sqrt(dop.trace())
+    pdop = np.sqrt(dop[:3,:3].trace())
+    hdop = np.sqrt(dop[:2,:2].trace())
+    vdop = np.sqrt(dop[2,2])
+    tdop = np.sqrt(dop[3,3])
+    return gdop, pdop, hdop, vdop, tdop, n
+  
   def __init__(self, config: VDFLLConfig):
     # grab config
     self._is_signal_level = config.is_signal_level
@@ -68,19 +103,21 @@ class VectorTrack:
     self.T = config.T
     if config.order == 2:
       self.rx_state = np.hstack((config.pos, config.vel, config.clock_bias, config.clock_drift))
+      self.rx_cov = np.diag([2.0,2.0,2.0,0.05,0.05,0.05,2.0,0.1])
     elif config.order == 3:
       self.rx_state = np.hstack((config.pos, config.vel, 0,0,0, config.clock_bias, config.clock_drift))
+      self.rx_cov = np.diag([2.0,2.0,2.0,0.05,0.05,0.05,0.01,0.01,0.01,2.0,0.1])
     else:
       _log.Error("VectorTrack::init -> invalid filter order specified. Must be 2 or 3.")
       raise ValueError()
     self.__generate_A(config.order)
     self.__generate_Q(config.order, config.process_noise_stdev)
-    # self.rx_cov = np.diag([2.0,2.0,2.0,0.05,0.05,0.05,1.0,0.03])
-    self.rx_cov = np.eye(self.rx_state.size)
     
     # generate ecef-2-enu rotation matrix
     self._lla0 = ecef2lla(config.pos)
+    self._ecef0 = config.pos
     self._C_e_n = ecef2enuDcm(self._lla0)
+    self._C_n_e = self._C_e_n.T
   
 
 #--------------------------------------------------------------------------------------------------#
@@ -92,7 +129,7 @@ class VectorTrack:
     return self.rx_state, self.rx_cov
   
   #! === Measurement Update (correction) ===
-  def measurement_update(self):
+  def measurement_update(self, meas_prange: np.ndarray, meas_prange_rate: np.ndarray):
     # observation and covariance matrix
     self.__estimate_cn0()
     self.__generate_C(self._order)
@@ -104,26 +141,26 @@ class VectorTrack:
       self._is_cov_initialized = True
       
     # measurement residuals (half chip spacing to minimize correlation between early and late)
-    chip_error = dll_error(
-        self._correlators.IE, self._correlators.QE, self._correlators.IL, self._correlators.QL, self._tap_spacing
-      ) * self._chip_width
-    freq_error = fll_error(
-        self._correlators.ip1, self._correlators.ip2, self._correlators.qp1, self._correlators.qp2, self.T
-      ) * -self._wavelength
-    # dy = np.concatenate((chip_error + prange_meas - self._pred_pranges, 
-    #                      freq_error + prange_rate_meas - self._pred_prange_rates))
-    dy = np.concatenate((chip_error, freq_error))
+    # chip_error = dll_error(
+    #     self._correlators.IE, self._correlators.QE, self._correlators.IL, self._correlators.QL, self._tap_spacing
+    #   ) * self._chip_width
+    # freq_error = fll_error(
+    #     self._correlators.ip1, self._correlators.ip2, self._correlators.qp1, self._correlators.qp2, self.T
+    #   ) * -self._wavelength
+    # dy = np.concatenate((chip_error, freq_error))
+    dy = np.concatenate((meas_prange - self._pred_prange, 
+                         meas_prange_rate - self._pred_prange_rate))
     
     # innovation filtering
     S = self._C @ self.rx_cov @ self._C.T + self._R
-    norm_z = np.abs(dy / np.sqrt(np.diag(S))) # norm_z = np.abs(dy / np.diag(np.linalg.cholesky(S)))
+    norm_z = np.abs(dy / np.sqrt(np.diag(S))) # norm_z = np.abs(dy / np.diag(cholesky(S)))
     fault_idx = np.nonzero(norm_z < self._innovation_stdev)[0]
     self._C = self._C[fault_idx,:]
     self._R = np.diag(self._R[fault_idx,fault_idx])
     dy = dy[fault_idx]
     
     # update
-    L = self.rx_cov @ self._C.T @ np.linalg.inv(self._C @ self.rx_cov @ self._C.T + self._R)
+    L = self.rx_cov @ self._C.T @ inv(self._C @ self.rx_cov @ self._C.T + self._R)
     I_LC = np.eye(self.rx_state.size) - L @ self._C
     self.rx_cov = (I_LC @ self.rx_cov @ I_LC.T) + (L @ self._R @ L.T)
     self.rx_state += L @ dy
@@ -131,25 +168,30 @@ class VectorTrack:
   
   #! === Predict Observables ===
   def predict_observables(self, emitter_states: dict) -> tuple[np.ndarray, np.ndarray]:
-    self._num_channels = len(emitter_states)
-    self._emitters = list(emitter_states.keys())
-    
-    self._unit_vectors = np.zeros((self._num_channels, 3))
-    self._pred_pranges, self._pred_prange_rates = np.zeros(self._num_channels), np.zeros(self._num_channels)
-    
-    i = 0
+    URs = []
+    UVs = []
+    ranges = []
+    range_rates = []
+
     for emitter in emitter_states.values():
-      # self._pred_pranges[i], self._unit_vectors[i,:] = compute_range_and_unit_vector(self.rx_state[0:3], emitter.pos)
-      # self._pred_prange_rates[i] = compute_range_rate(self.rx_state[3:6], emitter.vel, self._unit_vectors[i,:])
       dr = emitter.pos - self.rx_state[0:3]
-      self._pred_pranges[i] = np.linalg.norm(dr)
-      self._unit_vectors[i,:] = dr / self._pred_pranges[i]
-      self._pred_prange_rates[i] = self._unit_vectors[i,:] @ (emitter.vel - self.rx_state[3:6])
-      i += 1
-    
-    self._pred_pranges += self.rx_state[-2]
-    self._pred_prange_rates += self.rx_state[-1]
-    return self._pred_pranges, self._pred_prange_rates
+      dv = emitter.vel - self.rx_state[3:6]
+      
+      r = norm(dr)
+      ur = dr / r
+      v = ur @ dv
+      uv = np.cross(ur, np.cross(ur, dv/r))
+      
+      URs.append(ur)
+      UVs.append(uv)
+      ranges.append(r)
+      range_rates.append(v)
+      
+    self._pred_prange = np.array(ranges) + self.rx_state[-2]            #* add clock bias
+    self._pred_prange_rate = np.array(range_rates) + self.rx_state[-1]  #* add clock drift
+    self._range_unit_vectors = np.array(URs)
+    self._rate_unit_vectors = np.array(UVs)
+    return self._pred_prange, self._pred_prange_rate
   
   #! === Predict NCO Frequencies ===
 
@@ -190,7 +232,19 @@ class VectorTrack:
   #! === Initialize Receiver Covariance Matrix ===
   def __initialize_covariance(self):
     # this allows for quick convergence
-    self.rx_cov = 10*solve_discrete_are(self._A.T, self._C.T, self._Q, self._R)
+    # self.rx_cov = 10*solve_discrete_are(self._A.T, self._C.T, 0.5*(self._Q+self._Q.T), self._R)
+    
+    I = np.eye(self._A.shape[0])
+    delta_diag_P = np.diag(self.rx_cov)
+
+    while np.any(delta_diag_P > 1e-4):
+      previous_P = self.rx_cov
+
+      self.rx_cov = self._A @ self.rx_cov @ self._A.T + self._Q
+      K = self.rx_cov @ self._C.T @ inv(self._C @ self.rx_cov @ self._C.T + self._R)
+      self.rx_cov = (I - K @ self._C) @ self.rx_cov @ (I - K @ self._C).T + K @ self._R @ K.T
+
+      delta_diag_P = np.diag(previous_P - self.rx_cov)
   
   #! === State Transition Matrix ===
   def __generate_A(self, order: int):
@@ -233,14 +287,15 @@ class VectorTrack:
       
   #! === Observation Matrix ===
   def __generate_C(self, order: int):
-    Z = np.zeros(self._unit_vectors.shape)
-    Z1, I1 = np.zeros(self._unit_vectors.shape[0]), np.ones(self._unit_vectors.shape[0])
+    Z = np.zeros(self._range_unit_vectors.shape)
+    Z1 = np.zeros(self._range_unit_vectors.shape[0])
+    I1 = np.ones(self._range_unit_vectors.shape[0])
     if order == 2:
-      self._C = np.block([[-self._unit_vectors, Z, I1[:,None], Z1[:,None]],
-                          [Z, -self._unit_vectors, Z1[:,None], I1[:,None]]])
+      self._C = np.block([[-self._range_unit_vectors, Z, I1[:,None], Z1[:,None]],
+                          [-self._rate_unit_vectors, -self._range_unit_vectors, Z1[:,None], I1[:,None]]])
     elif order == 3:
-      self._C = np.block([[-self._unit_vectors, Z, Z, I1[:,None], Z1[:,None]],
-                          [Z, -self._unit_vectors, Z, Z1[:,None], I1[:,None]]])
+      self._C = np.block([[-self._range_unit_vectors, Z, Z, I1[:,None], Z1[:,None]],
+                          [-self._rate_unit_vectors, -self._range_unit_vectors, Z, Z1[:,None], I1[:,None]]])
       
   #! === Measurement Noise Covariance ===
   def __generate_R(self):

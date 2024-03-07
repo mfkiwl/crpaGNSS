@@ -16,18 +16,19 @@
 '''
 
 import numpy as np
-from scipy.linalg import solve_discrete_are, solve_continuous_are, inv
+from scipy.linalg import solve_discrete_are, solve_continuous_are, inv, norm, cholesky
 
 from charlizard.models.discriminator import prange_rate_residual_var, prange_residual_var, fll_error, dll_error
 from charlizard.models.lock_detectors import CN0_m2m4_estimator, CN0_beaulieu_estimator
 from charlizard.models.correlators import Correlators
 from charlizard.navigators.structures import GNSSINSConfig
 from navsim.error_models.clock import NavigationClock, get_clock_allan_variance_values
+from navsim.error_models.imu import IMU, get_imu_allan_variance_values
 
-from navtools.conversions.coordinates import ecef2enuDcm, ecef2lla
+from navtools.conversions.coordinates import ecef2nedDcm, ecef2lla, ecef2enuDcm
 from navtools.conversions.attitude import euler2dcm, dcm2quat, quat2dcm, dcm2euler
 from navtools.conversions.skew import skew, deskew
-from navtools.measurements.gravity import ned2ecefg
+from navtools.measurements.gravity import ned2ecefg, ecefg
 from navtools.measurements.radii_of_curvature import geocentricRadius
 from navtools.constants import GNSS_OMEGA_EARTH, SPEED_OF_LIGHT
 
@@ -48,8 +49,8 @@ class GnssIns:
   def extract_states(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     # update ENU state
     self.att = dcm2euler((self._C_e_n @ self._C).T) * R2D
-    self.vel = self._C_n_e @ self._v_eb_e
-    self.pos = self._C_n_e @ (self._r_eb_e - self._ecef0)
+    self.vel = self._C_e_n_enu @ self._v_eb_e
+    self.pos = self._C_e_n_enu @ (self._r_eb_e - self._ecef0)
     self.lla = ecef2lla(self._r_eb_e) * LLA_R2D
     self.clk = self.rx_state[-2:]
     return self.pos, self.vel, self.att, self.lla, self.clk
@@ -57,9 +58,9 @@ class GnssIns:
   @property
   def extract_stds(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     # extract ENU standard deviations
-    att = np.sqrt(np.diag(self._C_e_n @ self.rx_cov[0:3,0:3] @ self._C_n_e)) * R2D
-    vel = np.sqrt(np.diag(self._C_e_n @ self.rx_cov[3:6,3:6] @ self._C_n_e))
-    pos = np.sqrt(np.diag(self._C_e_n @ self.rx_cov[6:9,6:9] @ self._C_n_e))
+    att = np.sqrt(np.diag(self._C_e_n_enu @ self.rx_cov[0:3,0:3] @ self._C_n_e_enu)) * R2D
+    vel = np.sqrt(np.diag(self._C_e_n_enu @ self.rx_cov[3:6,3:6] @ self._C_n_e_enu))
+    pos = np.sqrt(np.diag(self._C_e_n_enu @ self.rx_cov[6:9,6:9] @ self._C_n_e_enu))
     clk = np.sqrt(np.diag(self.rx_cov[-2:,-2:]))
     return pos, vel, att, clk
   
@@ -69,29 +70,38 @@ class GnssIns:
     i1 = np.ones(n)
     H = np.block([self._range_unit_vectors, i1[:,None]])
     dop = inv(H.T @ H)
-    dop[:3,:3] = self._C_e_n @ dop[:3,:3] @ self._C_n_e
+    dop[:3,:3] = self._C_e_n_enu @ dop[:3,:3] @ self._C_n_e_enu
     gdop = np.sqrt(dop.trace())
     pdop = np.sqrt(dop[:3,:3].trace())
-    hdop = np.sqrt(dop[:3,:3].trace())
-    vdop = np.sqrt(dop[2,2].trace())
-    tdop = np.sqrt(dop[2,2].trace())
+    hdop = np.sqrt(dop[:2,:2].trace())
+    vdop = np.sqrt(dop[2,2])
+    tdop = np.sqrt(dop[3,3])
     return gdop, pdop, hdop, vdop, tdop, n
   
   def __init__(self, config: GNSSINSConfig):
     self.T = config.T
     self.cn0 = config.cn0
     
-    self._Srg = config.Srg
-    self._Sra = config.Sra
-    self._Sbad = config.Sbad
-    self._Sbgd = config.Sbgd
     self._innovation_stdev = config.innovation_stdev
+    self._tap_spacing = config.tap_spacing
     if config.clock_type is None:
-      clock_config = NavigationClock(h0=0.0, h1=0.0, h2=0.0)
+      self._Sb = 0
+      self._Sd = 0
     else:
       clock_config = get_clock_allan_variance_values(config.clock_type)
-    self._Sb = clock_config.h0 / 2
-    self._Sd = clock_config.h2 * 2 * np.pi**2
+      self._Sb = clock_config.h0 / 2
+      self._Sd = clock_config.h2 * 2 * np.pi**2
+    if config.imu_model is None:
+      self._Srg = 0
+      self._Sra = 0
+      self._Sbad = 0
+      self._Sbgd = 0
+    else:
+      imu_model = get_imu_allan_variance_values(config.imu_model)
+      self._Srg = imu_model.gb_psd**2
+      self._Sra = imu_model.ab_psd**2
+      self._Sbad = imu_model.vrw**2
+      self._Sbgd = imu_model.arw**2
     
     # signal settings
     # sig_config = config.signal_config.get('gps'.casefold())
@@ -104,7 +114,7 @@ class GnssIns:
     self._correlators = Correlators(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     
     # cn0 estimation config
-    self.cn0 = config.cn0
+    self.cn0 = config.cn0.copy()
     self._cn0_counter = 0
     self._cn0_buffer_len = config.cn0_buffer_len
     self._cn0_ip_buffer = []
@@ -112,50 +122,59 @@ class GnssIns:
       
     # basis PVA
     self._lla0 = ecef2lla(config.pos)
-    self._ecef0 = config.pos
-    self._C_n_e = ecef2enuDcm(self._lla0)
-    self._C_e_n = self._C_n_e.T
+    self._ecef0 = config.pos.copy()
+    self._C_e_n = ecef2nedDcm(self._lla0)
+    self._C_n_e = self._C_e_n.T
+    self._C_e_n_enu = ecef2enuDcm(self._lla0)
+    self._C_n_e_enu = self._C_e_n_enu.T
     
     # initialize ENU state (comparison state)
-    self.lla = self._lla0 * LLA_R2D                           #* LLA position [deg, deg, m]
-    self.pos = self._C_n_e @ (config.pos - self._ecef0)       #* ENU position
-    self.vel = self._C_n_e @ config.vel                       #* ENU velocity
-    self.att = config.att                                     #* roll, pitch, yaw [deg]
-    self.clk = np.array(config.clock_bias, config.clock_drift)#* clock bias and drift
+    self.lla = self._lla0 * LLA_R2D                             #* LLA position [deg, deg, m]
+    self.pos = self._C_e_n @ (config.pos - self._ecef0)         #* ENU position
+    self.vel = self._C_e_n @ config.vel                         #* ENU velocity
+    self.att = config.att.copy()                                #* roll, pitch, yaw [deg]
+    self.clk = np.array([config.clock_bias, config.clock_drift])#* clock bias and drift
     
     # initialize ECEF state (mechanized rx state)
     self._C = self._C_n_e @ euler2dcm(D2R * config.att).T   #* attitude dcm
     self._q = dcm2quat(self._C)                             #* attitude quaternion
-    self._r_eb_e = config.pos                               #* ECEF position
-    self._v_eb_e = config.vel                               #* ECEF velocity
+    self._r_eb_e = config.pos.copy()                        #* ECEF position
+    self._v_eb_e = config.vel.copy()                        #* ECEF velocity
+    self._ab_drift = np.zeros(3)
+    self._gb_drift = np.zeros(3)
+    self._ab_static = imu_model.ab_sta
+    self._gb_static = imu_model.gb_sta
     
     # initialize state and covariance
     self.rx_state = np.zeros(17)
-    self.rx_cov = np.eye(17)
-    self.rx_state[-2:] = self.clk
+    self.rx_cov = np.diag([0.03,0.03,0.03,0.03,0.03,0.05,2.0,2.0,2.0,0.01,0.01,0.01,1e-4,1e-4,1e-4,2.0,0.1])
+    self.rx_state[-2:] = self.clk.copy()
     self._is_cov_initialized = False
+    # self.__generate_A(np.zeros(3))
+    # self.__generate_Q()
     
     
 #--------------------------------------------------------------------------------------------------#
   #! === Kalman Filter Time Update (prediction) ===
   def time_update(self, w_ib_b: np.ndarray, f_ib_b: np.ndarray):
     # mechanize imu
-    self._gravity, self._gamma_ib_e = ned2ecefg(self._r_eb_e)
-    self.mechanize(w_ib_b, f_ib_b)
+    wb = w_ib_b - self._gb_static - self._gb_drift
+    fb = f_ib_b - self._ab_static - self._ab_drift
+    self.mechanize(wb, fb)
     
     # updated gravity and geocentric radius
     self.lla = ecef2lla(self._r_eb_e)
     self._gravity, self._gamma_ib_e = ned2ecefg(self._r_eb_e)
-    self._r_eS_e = geocentricRadius(self.lla[0]*D2R)
+    # self._gravity, self._gamma_ib_e = ecefg(self._r_eb_e)
+    self._r_eS_e = geocentricRadius(self.lla[0])
     
     # generate transition matrices
-    self.__generate_A(f_ib_b)
+    self.__generate_A(fb)
     self.__generate_Q()
     
     # time update (assumed constant T)
     self.rx_state[-2] += self.rx_state[-1] * self.T           #* only need to predict clock states
     self.rx_cov = self._F @ self.rx_cov @ self._F.T + self._Q
-    # self.clk = self.rx_state[-2:]
     
   #! === Kalman Filter Measurement Update (correction) ===
   def measurement_update(self, meas_prange: np.ndarray, meas_prange_rate: np.ndarray):
@@ -176,13 +195,13 @@ class GnssIns:
     freq_error = fll_error(
         self._correlators.ip1, self._correlators.ip2, self._correlators.qp1, self._correlators.qp2, self.T
       ) * -self._wavelength
-    dy = np.concatenate((chip_error + meas_prange - self._pred_prange, 
-                         freq_error + meas_prange_rate - self._pred_prange_rate))
-    # dy = np.concatenate((chip_error, freq_error))
+    # dy = np.concatenate((chip_error + meas_prange - self._pred_prange, 
+    #                      freq_error + meas_prange_rate - self._pred_prange_rate))
+    dy = np.concatenate((chip_error, freq_error))
     
     # innovation filtering
     S = self._H @ self.rx_cov @ self._H.T + self._R
-    norm_z = np.abs(dy / np.sqrt(np.diag(S))) # norm_z = np.abs(dy / np.diag(np.linalg.cholesky(S)))
+    norm_z = np.abs(dy / np.sqrt(np.diag(S))) # norm_z = np.abs(dy / np.diag(cholesky(S)))
     fault_idx = np.nonzero(norm_z < self._innovation_stdev)[0]
     self._H = self._H[fault_idx,:]
     self._R = np.diag(self._R[fault_idx,fault_idx])
@@ -205,8 +224,9 @@ class GnssIns:
     self._C = quat2dcm(self._q)
     self._v_eb_e -= self.rx_state[3:6]
     self._r_eb_e -= self.rx_state[6:9]
-    ab_drift = ab_drift + self.rx_state[9:12]
-    gb_drift = gb_drift + self.rx_state[12:15]
+    self._ab_drift += self.rx_state[9:12]
+    self._gb_drift += self.rx_state[12:15]
+    self.rx_state[:15] = np.zeros(15)
   
   #! ===IMU Mechanization (ECEF Frame) ===
   def mechanize(self, w_ib_b: np.ndarray, f_ib_b: np.ndarray):
@@ -217,34 +237,38 @@ class GnssIns:
     
     # rotational phase increment
     a_ib_b = w_ib_b * self.T
-    mag_a_ib_b = np.linalg.norm(a_ib_b)
+    mag_a_ib_b = norm(a_ib_b)
     
     # (Groves E.39) precision quaternion from old to new attitude
-    q_new_old = np.array([np.cos(mag_a_ib_b/2), np.sin(mag_a_ib_b/2)/mag_a_ib_b*a_ib_b])
+    if mag_a_ib_b > 0:
+      q_new_old = np.array([np.cos(mag_a_ib_b/2), *np.sin(mag_a_ib_b/2)/mag_a_ib_b*a_ib_b])
+    else:
+      q_new_old = np.array([1,0,0,0])
     
     p0, p1, p2, p3 = self._q
     q0, q1, q2, q3 = q_new_old
     a1, a2, a3 = w_ie * self.T / 2
     
     # (Groves E.40) quaternion multiplication attitude update
-    self._q = np.array([(p0*q0 - p1*q1 - p2*q2 - p3*q3) - (-a1*q1 - a2*q2 - a3*q3), 
-                        (p0*q1 + p1*q0 + p2*q3 - p3*q2) - ( a1*q0 + a2*q3 - a3*q2), 
-                        (p0*q2 - p1*q3 + p2*q0 + p3*q1) - (-a1*q3 + a2*q0 + a3*q1), 
-                        (p0*q3 + p1*q2 - p2*q1 + p3*q0) - ( a1*q2 - a2*q1 + a3*q0)])
+    self._q = np.array([(p0*q0 - p1*q1 - p2*q2 - p3*q3) - (-a1*p1 - a2*p2 - a3*p3), 
+                        (p0*q1 + p1*q0 + p2*q3 - p3*q2) - ( a1*p0 + a2*p3 - a3*p2), 
+                        (p0*q2 - p1*q3 + p2*q0 + p3*q1) - (-a1*p3 + a2*p0 + a3*p1), 
+                        (p0*q3 + p1*q2 - p2*q1 + p3*q0) - ( a1*p2 - a2*p1 + a3*p0)])
     
     # (Groves E.43) quaternion normalization
-    self._q /= np.linalg.norm(self._q)
+    self._q /= norm(self._q)
     
     # convert to DCM and euler angles
     self._C = quat2dcm(self._q)
-    # C_avg = quat2dcm((q_old + self._q)/2)
-    C_avg = quat2dcm(q_old + self._q)
+    C_avg = quat2dcm((q_old + self._q)/2)
     
     # (Groves 5.85) specific force transformation body-to-ECEF
     f_ib_e = C_avg@f_ib_b
 
     # (Groves 5.36) velocity update
-    self._v_eb_e = v_old + self.T*(f_ib_e + self._gravity - 2*OMEGA_IE_E@self._v_eb_e)
+    self._gravity, self._gamma_ib_e = ned2ecefg(self._r_eb_e)
+    # self._gravity, self._gamma_ib_e = ecefg(self._r_eb_e)
+    self._v_eb_e = v_old + self.T*(f_ib_e + self._gravity - 2*OMEGA_IE_E@v_old)
 
     # (Groves 5.38) position update
     self._r_eb_e = p_old + self.T*(self._v_eb_e + v_old)/2
@@ -260,7 +284,7 @@ class GnssIns:
       dr = emitter.pos - self._r_eb_e
       dv = emitter.vel - self._v_eb_e
       
-      r = np.linalg.norm(dr)
+      r = norm(dr)
       ur = dr / r
       v = ur @ dv
       uv = np.cross(ur, np.cross(ur, dv/r))
@@ -274,6 +298,7 @@ class GnssIns:
     self._pred_prange_rate = np.array(range_rates) + self.rx_state[-1]  #* add clock drift
     self._range_unit_vectors = np.array(URs)
     self._rate_unit_vectors = np.array(UVs)
+    return self._pred_prange, self._pred_prange_rate
 
 
 #--------------------------------------------------------------------------------------------------#
@@ -281,23 +306,24 @@ class GnssIns:
   def __generate_A(self, f_ib_b: np.ndarray):
     # (Groves 14.18/87) state transition matrix discretization
     self._f21 = -skew(self._C @ f_ib_b)
-    self._f23 = np.outer(-(2*self._gamma_ib_e/self._r_es_e), (self._r_eb_e/np.linalg.norm(self._r_eb_e)))
+    self._f23 = np.outer(-(2*self._gamma_ib_e/self._r_eS_e), (self._r_eb_e/norm(self._r_eb_e)))
     
     # temp variables for reducing math
     oc = OMEGA_IE_E@self._C
     of = OMEGA_IE_E@self._f21
+    fo = self._f21@OMEGA_IE_E
     fc = self._f21@self._C
     foc = self._f21@oc
     
     # (Groves appendix I) third order expansion
     A11 = I3 - OMEGA_IE_E*self.T
     A15 = self._C*self.T - (oc*self.T**2)/2
-    A21 = self._f21*self.T - (foc*self.T**2)/2 - of*self.T**2
+    A21 = self._f21*self.T - (fo*self.T**2)/2 - of*self.T**2
     A22 = I3 - 2*OMEGA_IE_E*self.T
     A23 = self._f23*self.T
     A24 = self._C*self.T - oc*self.T**2
     A25 = (fc*self.T**2)/2 - (foc*self.T**3)/6 - (of@self._C*self.T**3)/3
-    A31 = (self._f21*self.T**2)/2 - (self._f21@OMEGA_IE_E*self.T**3)/6 - (of*self.T)/3
+    A31 = (self._f21*self.T**2)/2 - (fo*self.T**3)/6 - (of*self.T**3)/3
     A32 = I3*self.T - OMEGA_IE_E*self.T**2
     A34 = (self._C*self.T**2)/2 - (oc*self.T**3)/3
     A35 = (fc*self.T**3)/6
@@ -335,17 +361,17 @@ class GnssIns:
     Q25 = (self._Sbgd*self.T**3)/3*fc
     Q44 = self._Sbad*self.T*I3
     Q55 = self._Sbgd*self.T*I3
-    Q66 = SPEED_OF_LIGHT * np.array(
-            [[self._Sb*self.T + 1/3*self._Sd*self.T**3, 1/2*self._Sd*self.T**2], \
-             [                  1/2*self._Sd*self.T**2,        self._Sd*self.T]]
+    Q66 = SPEED_OF_LIGHT**2 * np.array(
+            [[self._Sb*self.T + (self._Sd*self.T**3)/3, (self._Sd*self.T**2)/2], \
+             [                  (self._Sd*self.T**2)/2,        self._Sd*self.T]]
           )
           
     self._Q = np.block(
                 [[  Q11, Q21.T, Q31.T, Z33, Q15, Z32], 
                  [  Q21,   Q22, Q32.T, Q24, Q25, Z32], 
                  [  Q31,   Q32,   Q33, Q34, Q35, Z32], 
-                 [  Z33, Q24.T, Q32.T, Q44, Z33, Z32], 
-                 [Q15.T, Q25.T, Q35.T, Z33, Q55, Z32], 
+                 [  Z33,   Q24, Q34.T, Q44, Z33, Z32], 
+                 [  Q15, Q25.T, Q35.T, Z33, Q55, Z32], 
                  [  Z23,   Z23,   Z23, Z23, Z23, Q66]]
               )
     
@@ -362,8 +388,8 @@ class GnssIns:
   #! === Measurement Noise Covariance ===
   def __generate_R(self):
     self._R = np.diag( 
-                np.concatenate((prange_residual_var(self.cn0, self.T, self._chip_width), 
-                                prange_rate_residual_var(self.cn0, self.T, self._wavelength))) 
+                np.concatenate((prange_residual_var(self.cn0, 2*self.T, self._chip_width), 
+                                prange_rate_residual_var(self.cn0, 2*self.T, self._wavelength))) 
               )
 
 
@@ -381,19 +407,19 @@ class GnssIns:
       ip_tmp = np.array(self._cn0_ip_buffer)
       qp_tmp = np.array(self._cn0_qp_buffer)
       for i in range(self.cn0.size):
-        self.cn0[i] = CN0_m2m4_estimator(
-            ip_tmp[:,i], 
-            qp_tmp[:,i], 
-            self.cn0[i], 
-            self.T
-          )
-        # self.cn0[i] = CN0_beaulieu_estimator(
+        # self.cn0[i] = CN0_m2m4_estimator(
         #     ip_tmp[:,i], 
         #     qp_tmp[:,i], 
         #     self.cn0[i], 
-        #     self.T,
-        #     False,
+        #     self.T
         #   )
+        self.cn0[i] = CN0_beaulieu_estimator(
+            ip_tmp[:,i], 
+            qp_tmp[:,i], 
+            self.cn0[i], 
+            self.T,
+            False,
+          )
       self._cn0_counter = 0
       self._cn0_ip_buffer = []
       self._cn0_qp_buffer = []
@@ -403,5 +429,17 @@ class GnssIns:
   #! === Initialize Receiver Covariance Matrix ===
   def __initialize_covariance(self):
     # this allows for quick convergence
-    self.rx_cov = 10*solve_discrete_are(self._F.T, self._H.T, self._Q, self._R)
+    # self.rx_cov = 10*solve_discrete_are(self._F.T, self._H.T, 0.5*(self._Q+self._Q.T), self._R)
     
+    I = np.eye(self._F.shape[0])
+    delta_diag_P = np.diag(self.rx_cov)
+
+    while np.any(delta_diag_P > 1e-4):
+      previous_P = self.rx_cov
+
+      self.rx_cov = self._F @ self.rx_cov @ self._F.T + self._Q
+      K = self.rx_cov @ self._H.T @ inv(self._H @ self.rx_cov @ self._H.T + self._R)
+      self.rx_cov = (I - K @ self._H) @ self.rx_cov @ (I - K @ self._H).T + K @ self._R @ K.T
+
+      delta_diag_P = np.diag(previous_P - self.rx_cov)
+  

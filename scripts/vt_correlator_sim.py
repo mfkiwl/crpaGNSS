@@ -60,12 +60,16 @@ if __name__ == "__main__":
   meas_sim.simulate()
   
   # initialize output
+  true_pos_enu = np.zeros(truth_pos.shape)
+  vt_pos_enu = np.zeros(truth_pos.shape)
+  vt_vel_enu = np.zeros(truth_vel.shape)
+  vt_clk = np.zeros((truth_pos.shape[0],2))
   vt_pos_err_enu = np.zeros(truth_pos.shape)
   vt_vel_err_enu = np.zeros(truth_vel.shape)
-  vt_clk_bias_err = np.zeros(truth_pos.shape[0])
-  vt_clk_drift_err = np.zeros(truth_vel.shape[0])
+  vt_clk_err = np.zeros((truth_pos.shape[0],2))
   vt_pos_var_enu = np.zeros(truth_pos.shape)
   vt_vel_var_enu = np.zeros(truth_vel.shape)
+  vt_clk_var = np.zeros((truth_pos.shape[0],2))
   vt_corr = np.zeros((truth_pos.shape[0], 6, len(meas_sim.observables[0])))
   vt_cn0 = np.zeros((truth_pos.shape[0], len(meas_sim.observables[0])))
   vt_dop = np.zeros((truth_pos.shape[0], 6))
@@ -73,7 +77,7 @@ if __name__ == "__main__":
   # vector tracking configuration
   vt_config = VDFLLConfig(
     order = 3,
-    process_noise_stdev = 0.5,
+    process_noise_stdev = 1.0,
     tap_spacing = 1.0,
     innovation_stdev = 3.0,
     cn0_buffer_len = 100,
@@ -110,15 +114,16 @@ if __name__ == "__main__":
     vdfll.update_correlators(corr)
     
     # measurement update
-    vdfll.measurement_update()
+    vdfll.measurement_update(np.array([emitter.code_pseudorange for emitter in obs.values()]), 
+                             np.array([emitter.pseudorange_rate for emitter in obs.values()]))
     
     # log performance
-    vt_pos_err_enu[i,:] = ecef2enu(truth_pos[i,:], lla0) - ecef2enu(vdfll.rx_state[0:3], lla0)
-    vt_vel_err_enu[i,:] = ecef2enuv(truth_vel[i,:], lla0) - ecef2enuv(vdfll.rx_state[3:6], lla0)
-    vt_clk_bias_err[i] = meas_sim.rx_states.clock_bias[i] - vdfll.rx_state[-2]
-    vt_clk_drift_err[i] = meas_sim.rx_states.clock_drift[i] - vdfll.rx_state[-1]
-    vt_pos_var_enu[i,:] = np.diag(C_e_n @ vdfll.rx_cov[0:3, 0:3] @ C_e_n.T)
-    vt_vel_var_enu[i,:] = np.diag(C_e_n @ vdfll.rx_cov[3:6, 3:6] @ C_e_n.T)
+    vt_pos_enu[i,:], vt_vel_enu[i,:], _, vt_clk[i,:] = vdfll.extract_states
+    true_pos_enu[i,:] = ecef2enu(meas_sim.rx_states.pos[i,:], lla0)
+    vt_pos_err_enu[i,:] = true_pos_enu[i,:] - vt_pos_enu[i,:]
+    vt_vel_err_enu[i,:] = ecef2enuv(meas_sim.rx_states.vel[i,:], lla0) - vt_vel_enu[i,:]
+    vt_clk_err[i] = np.array([meas_sim.rx_states.clock_bias[i], meas_sim.rx_states.clock_drift[i]]) - vt_clk[i,:]
+    vt_pos_var_enu[i,:], vt_vel_var_enu[i,:], vt_clk_var[i,:] = vdfll.extract_stds
     vt_corr[i,0,:] = corr.IE
     vt_corr[i,1,:] = corr.IP
     vt_corr[i,2,:] = corr.IL
@@ -126,7 +131,7 @@ if __name__ == "__main__":
     vt_corr[i,4,:] = corr.QP
     vt_corr[i,5,:] = corr.QL 
     vt_cn0[i,:] = vdfll.cn0
-    # vt_dop[i,:] = ?
+    vt_dop[i,:] = vdfll.extract_dops
     
     # if (epoch) % 500 == 0: # every 10 s
     #   t = ecef2enu(truth_pos[epoch,:], ecef2lla(truth_pos[0,:]))
@@ -185,8 +190,12 @@ if __name__ == "__main__":
   
   h3, ax3 = plt.subplots(nrows=2, ncols=1)
   h3.suptitle('Clock Errors')
-  ax3[0].plot(tt, vt_clk_bias_err)
-  ax3[1].plot(tt, vt_clk_drift_err)
+  ax3[0].plot(tt, vt_clk_err[:,0] + 3*vt_clk_var[:,0], 'r')
+  ax3[0].plot(tt, vt_clk_err[:,0] - 3*vt_clk_var[:,0], 'r')
+  ax3[0].plot(tt, vt_clk_err[:,0], 'k')
+  ax3[1].plot(tt, vt_clk_err[:,1] + 3*vt_clk_var[:,1], 'r')
+  ax3[1].plot(tt, vt_clk_err[:,1] - 3*vt_clk_var[:,1], 'r')
+  ax3[1].plot(tt, vt_clk_err[:,1], 'k')
   ax3[0].set_ylabel('Bias [m]')
   ax3[1].set_ylabel('Drift [m/s]')
   ax3[1].set_xlabel('Time [s]')
@@ -197,6 +206,32 @@ if __name__ == "__main__":
   ax4.plot(tt, vt_cn0)
   ax4.set_ylabel('Ratio [dB-Hz]')
   ax4.set_xlabel('Time [s]')
+  
+  #* 2d position plot
+  h5, ax5 = plt.subplots()
+  h5.suptitle('2D ENU Position')
+  ax5.plot(true_pos_enu[:,0], true_pos_enu[:,1])
+  ax5.plot(vt_pos_enu[:,0], vt_pos_enu[:,1])
+  ax5.set_ylabel('North [m]')
+  ax5.set_xlabel('East [m]')
+  
+  #* dops
+  h6, ax6 = plt.subplots()
+  h6.suptitle('2D ENU Position')
+  ax6.plot(tt, vt_dop[:,0:-1])
+  ax6.set_ylabel('DOP')
+  ax6.set_xlabel('Time [s]')
+  ax6.legend(['GDOP', 'PDOP', 'HDOP', 'VDOP', 'TDOP'])
+  
+  #* correlators
+  h7, ax7 = plt.subplots()
+  h7.suptitle('Correlators')
+  ax7.plot(vt_corr[:,4,0], vt_corr[:,1,0], 'r.')
+  ax7.plot(vt_corr[:,3,0], vt_corr[:,0,0], 'g.')
+  ax7.plot(vt_corr[:,5,0], vt_corr[:,2,0], 'b.')
+  ax7.set_ylabel('Imaginary')
+  ax7.set_xlabel('Real')
+  ax7.legend(['Prompt', 'Early', 'Late'])
   
   plt.show()
   

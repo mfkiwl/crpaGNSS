@@ -20,6 +20,7 @@ yaml-parser = {path = "libs/yaml_parser", develop = true}
 
 [tool.poetry.group.dev.dependencies]
 snakeviz = "^2.2.0"
+ipykernel = "^6.29.2"
 
 [build-system]
 requires = ["poetry-core"]

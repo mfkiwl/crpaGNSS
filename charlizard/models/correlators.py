@@ -153,9 +153,93 @@ def correlator_model(err: CorrelatorErrors, cn0: np.ndarray, tau: float, T: floa
   QE = A * RE * np.sin(np.pi * err.freq * T + mean_subphase_error) + np.random.randn(n)
   QP = A * RP * np.sin(np.pi * err.freq * T + mean_subphase_error) + np.random.randn(n)
   QL = A * RL * np.sin(np.pi * err.freq * T + mean_subphase_error) + np.random.randn(n)
-  ip1 = A * RP * np.cos(np.pi * err.freq * T/2 + mean_half_1_subphase_err) + np.random.randn(n)/2
-  qp1 = A * RP * np.sin(np.pi * err.freq * T/2 + mean_half_1_subphase_err) + np.random.randn(n)/2
-  ip2 = A * RP * np.cos(np.pi * err.freq * T/2 + mean_half_2_subphase_err) + np.random.randn(n)/2
-  qp2 = A * RP * np.sin(np.pi * err.freq * T/2 + mean_half_2_subphase_err) + np.random.randn(n)/2
+  ip1 = A * RP * np.cos(np.pi * err.freq * T/2 + mean_half_1_subphase_err) + np.random.randn(n)
+  qp1 = A * RP * np.sin(np.pi * err.freq * T/2 + mean_half_1_subphase_err) + np.random.randn(n)
+  ip2 = A * RP * np.cos(np.pi * err.freq * T/2 + mean_half_2_subphase_err) + np.random.randn(n)
+  qp2 = A * RP * np.sin(np.pi * err.freq * T/2 + mean_half_2_subphase_err) + np.random.randn(n)
   
   return Correlators(IE, IP, IL, QE, QP, QL, ip1, qp1, ip2, qp2)
+
+
+class CorrelatorModel:
+  def __init__(self):
+    self.chip_err = []
+    self.freq_err = []
+    self.phase_err = []
+    self.cn0 = []
+  
+  def observable_error(self, 
+      pred_pranges:np.ndarray, pred_carrier_pranges: np.ndarray, pred_rates: np.ndarray, 
+      observables: dict, cn0s: np.ndarray, wavelengths: np.ndarray, chipwidths: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """calculates correlator error based on simulated and estimated observables
+
+    Parameters
+    ----------
+    pred_pranges : np.ndarray
+        Estimated pseudorange for each emitter from navigator
+    pred_carrier_pranges : np.ndarray
+        Estimated carrier pseudorange for each emitter from navigator
+    pred_rates : np.ndarray
+        Estimated pseudorange-rate for each emitter from navigator
+    observables : dict
+        Contains simulated observable data for each emitter (pseudoranges and rates). Must Contain
+          - code_pseudorange
+          - carrier_pseudorange
+          - pseudorange_rate
+    wavelengths : np.ndarray
+        Channel carrier to noise density ratios [dB-Hz]
+    wavelengths : np.ndarray
+        Carrier wavelength [m]
+    chipwidths : np.ndarray
+        C/A code chip wavelength [m]
+        
+    Returns
+    -------
+    CorrelatorErrors
+        measurement and tracking errors
+    """
+    
+    chip_error, freq_error, phase_error = np.array([
+      ((emitter.code_pseudorange - pred_pranges[i]) / chipwidths[i], 
+       (emitter.pseudorange_rate - pred_rates[i]) / -wavelengths[i], 
+       (emitter.carrier_pseudorange - pred_carrier_pranges[i]) / wavelengths[i]
+      ) for i,emitter in enumerate(observables.values())])
+    
+    self.chip_err.append(chip_error)
+    self.freq_err.append(freq_error)
+    self.phase_err.append(phase_error)
+    self.cn0.append(cn0s)
+    
+    return chip_error, freq_error, phase_error
+  
+  def model(self, taus: np.ndarray, T: float, N: int=100) -> Correlators:
+    
+    # number of emitters
+    M = taus.size
+    
+    # convert to numpy arrays, must have at least 2 rows -> prepend with zeros
+    if len(self.chip_err) == 1:
+      cn0 = np.array(self.cn0.append(self.cn0))
+      chip_err = np.array(([0] * M).append(self.chip_err))
+      freq_err = np.array(([0] * M).append(self.freq_err))
+      phase_err = np.array(([0] * M).append(self.phase_err))
+    else:
+      cn0 = np.array(self.cn0)
+      chip_err = np.array(self.chip_err)
+      freq_err = np.array(self.freq_err)
+      phase_err = np.array(self.phase_err)
+    
+    # cn0 magnitude (remove log scaling)
+    mag_cn0 = 10**(0.1 * np.array(self.cn0))
+    
+    # auto-correlation function
+    RE = (1 - np.abs(chip_err + taus[None,:])) 
+    RE = np.where(RE < 0.0, RE, 0.0)
+    RP = 1 - np.abs(chip_err)
+    RP = np.where(RP < 0.0, RP, 0.0)
+    RL = 1 - np.abs(chip_err - taus[None,:])
+    RL = np.where(RL < 0.0, RL, 0.0)
+    
+    # approximate phase points over interval
+    

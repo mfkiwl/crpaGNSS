@@ -27,15 +27,15 @@ WAVELENGTH = SPEED_OF_LIGHT / FREQUENCY   #! [m]
 R2D = 180 / np.pi
 D2R = np.pi / 180
 
-N_ANT = 7                                 #! number of elements
-RADIAL_DIST = WAVELENGTH/2                #! [m] linear separation
-DEG_SEP = 360/6                           #! [deg] angular separation
+# N_ANT = 7                                 #! number of elements
+# RADIAL_DIST = WAVELENGTH/2                #! [m] linear separation
+# DEG_SEP = 360/6                           #! [deg] angular separation
 # N_ANT = 4                                 #! number of elements
 # RADIAL_DIST = WAVELENGTH/2                #! [m] linear separation
 # DEG_SEP = 360/4                           #! [deg] angular separation
-# N_ANT = 21                                #! number of elements
-# RADIAL_DIST = WAVELENGTH/2                #! [m] linear separation
-# DEG_SEP = 360/20                          #! [deg] angular separation
+N_ANT = 3                                #! number of elements
+RADIAL_DIST = WAVELENGTH/2                #! [m] linear separation
+DEG_SEP = 360/3                          #! [deg] angular separation
 
 AZ = 45.0 * D2R
 EL = 0.0 * D2R

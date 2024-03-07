@@ -1,6 +1,6 @@
 time:
-  duration: 282.49 # [s]
-  fsim: 50
+  duration: 204.49
+  fsim: 50 # [Hz]
   year: 2024
   month: 1
   day: 31
@@ -9,15 +9,24 @@ time:
   second: 18
 
 constellations:
-  mask_angle: 10.0 # [deg]
+  mask_angle: 5.0 # [deg]
   emitters:
     gps:
       signal: gpsl1ca
       js: 0.0
       correlator_model: bpsk
+    # iridium-next:
+    #   signal: gpsl1ca
+    #   js: 0.0
+    #   correlator_model: bpsk
 
 errors:
   # ionosphere: klobuchar
   # troposphere: saastamoinen
   rx_clock: high_quality_tcxo
 
+imu:
+  model: vn100
+  osr: 10
+  mobility: [3.0, 1.5, 6.0]
+  # vibration_model: sinusoidal
