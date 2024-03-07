@@ -19,7 +19,8 @@
 ## Docs
 - [Todo](#todo)
 - [Poetry](#poetry)
-- [Git Submodules](#git-submodules)
+- [Install](#installing)
+- [Git Submodules](#git-submodules-deprecated)
 
 ## Todo
 
@@ -36,7 +37,14 @@ poetry install  # install all dependencies in pyproject.toml
 poetry show     # show information about installed packages
 ```
 
-## Git Submodules
+## Installing
+```sh
+chmod +x install.sh
+./install.sh
+```
+You will need to switch the install directory from the git repositories to the relative paths!
+
+## Git Submodules (DEPRECATED)
 Add a submodule with the following commands:
 ```sh
 cd libs

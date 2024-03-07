@@ -34,4 +34,4 @@ env.bak/
 venv.bak/
 
 # ignore binded files
-libs/navtools/
+libs/

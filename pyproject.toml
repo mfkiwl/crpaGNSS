@@ -14,9 +14,11 @@ numba = "^0.58.1"
 pandas = "^2.1.1"
 matplotlib = "^3.8.2"
 seaborn = "^0.13.2"
-navsim = {path = "libs/navsim", develop = true}
+navtools = {path = "libs/navtools", develop = true}
 log-utils = {path = "libs/log_utils", develop = true}
 yaml-parser = {path = "libs/yaml_parser", develop = true}
+laika = {path = "libs/laika", develop = true}
+navsim = {path = "libs/navsim", develop = true}
 
 [tool.poetry.group.dev.dependencies]
 snakeviz = "^2.2.0"
