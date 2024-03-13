@@ -16,14 +16,15 @@
 '''
 
 import numpy as np
-from scipy.linalg import norm, inv
+from scipy.linalg import norm, inv, pinv, cholesky
 
 from charlizard.navigators.structures import GNSSINSConfig
 from charlizard.models.correlators import Correlators
 from charlizard.models.discriminator import prange_rate_residual_var, prange_residual_var, fll_error, dll_error
 from charlizard.models.lock_detectors import CN0_m2m4_estimator, CN0_beaulieu_estimator
 
-from navsim.error_models import get_clock_allan_variance_values, get_imu_allan_variance_values
+from navsim.error_models.clock import get_clock_allan_variance_values
+from navsim.error_models.imu import get_imu_allan_variance_values
 
 from navtools.conversions import ecef2lla, ecef2enuDcm, ecef2nedDcm, euler2dcm, dcm2quat, quat2dcm, dcm2euler, skew
 from navtools.measurements import ned2ecefg, ecefg, geocentricRadius
@@ -37,8 +38,9 @@ Z32 = np.zeros((3,2), dtype=np.double)
 Z23 = np.zeros((2,3), dtype=np.double)
 OMEGA_IE = np.array([0.0, 0.0, GNSS_OMEGA_EARTH], dtype=np.double)
 OMEGA_IE_E = skew(OMEGA_IE)
+I = np.eye(11)
 
-class GnssIns:
+class SoopIns:
   @property
   def extract_states(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     # update ENU state
@@ -47,7 +49,7 @@ class GnssIns:
     vel = self.__C_e_n @ self.__v_eb_e
     pos = self.__C_e_n @ (self.__r_eb_e - self.__ecef0)
     lla = ecef2lla(self.__r_eb_e) * LLA_R2D
-    clk = self.rx_state[-2:]
+    clk = np.array([self.__clk_bias, self.__clk_drift])
     return pos, vel, att, lla, clk
   
   @property
@@ -65,7 +67,10 @@ class GnssIns:
     n = self.__range_unit_vectors.shape[0]
     i1 = np.ones(n)
     H = np.block([self.__range_unit_vectors, i1[:,None]])
-    dop = inv(H.T @ H)
+    # if n > 3:
+    #   dop = inv(H.T @ H)
+    # else:
+    dop = pinv(H.T @ H)
     dop[:3,:3] = self.__C_e_n @ dop[:3,:3] @ self.__C_e_n.T
     gdop = np.sqrt(dop.trace())
     pdop = np.sqrt(dop[:3,:3].trace())
@@ -86,12 +91,13 @@ class GnssIns:
     
     # kalman filter config
     self.T = config.T
+    self.T_rcvr = config.T_rcvr
     self.cn0 = config.cn0
     self.__innovation_std = config.innovation_stdev
     self.__tap_spacing = config.tap_spacing
     self.__coupling = config.coupling
     self.__chip_width = SPEED_OF_LIGHT / 1.023e6
-    self.__wavelength = SPEED_OF_LIGHT / 1575.42e6
+    self.wavelength = SPEED_OF_LIGHT / 1575.42e6
     
     # cn0 estimation config
     self.__cn0_counter = 0
@@ -101,15 +107,15 @@ class GnssIns:
     
     # clock model
     if config.clock_type is None:
-      self.__clk_q = np.zeros((2,2), dtype=np.double)
+      clock_config = get_clock_allan_variance_values('high_quality_tcxo')
     else:
       clock_config = get_clock_allan_variance_values(config.clock_type)
-      Sb = clock_config.h0 / 2
-      Sd = clock_config.h2 * 2 * np.pi**2
-      self.__clk_q = 1.1 * SPEED_OF_LIGHT**2 * np.array(
-                                                  [[Sb*self.T + Sd/3*self.T**3, Sd/2*self.T**2],
-                                                   [            Sd/2*self.T**2,      Sd*self.T]], \
-                                                dtype=np.double)
+    Sb = clock_config.h0 / 2
+    Sd = clock_config.h2 * 2 * np.pi**2
+    self.__clk_q = 1.1 * SPEED_OF_LIGHT**2 * np.array(
+                                                [[Sb*self.T + Sd/3*self.T**3, Sd/2*self.T**2],
+                                                  [            Sd/2*self.T**2,      Sd*self.T]], \
+                                              dtype=np.double)
     self.__clk_f = np.array(
                       [[1.0, self.T], \
                        [0.0,    1.0]], \
@@ -117,13 +123,13 @@ class GnssIns:
       
     # imu model
     if config.imu_model is None:
-      self.__Srg, self.__Sra, self.__Sbad, self.__Sbgd = np.zeros(4, dtype=np.double)
+      imu_model = get_imu_allan_variance_values('industrial')
     else:
       imu_model = get_imu_allan_variance_values(config.imu_model)
-      self.__Srg = (1.1*imu_model.B_gyr)**2
-      self.__Sra = (1.1*imu_model.B_acc)**2
-      self.__Sbad = (1.1*imu_model.N_acc)**2
-      self.__Sbgd = (1.1*imu_model.N_gyr)**2
+    self.__Srg = (1.1*imu_model.B_gyr)**2
+    self.__Sra = (1.1*imu_model.B_acc)**2
+    self.__Sbad = (1.1*imu_model.N_acc)**2
+    self.__Sbgd = (1.1*imu_model.N_gyr)**2
     
     # initialize user state
     self.__ecef0 = config.pos.copy()
@@ -136,26 +142,15 @@ class GnssIns:
     self.__clk_drift = config.clock_drift
     
     # generate body to nav rotation
-    # sr, sp, sy = np.sin(config.att/R2D)
-    # cr, cp, cy = np.cos(config.att/R2D)
-    # C_b_n = np.array([[cr*cy - sr*sp*sy, cr*sy + sr*sp*cy, -sr*cp],
-    #                   [          -cp*sy,            cp*cy,     sp],
-    #                   [sr*cy + cr*sp*sy, sr*sy - cr*sp*cy,  cr*cp]], dtype=np.double).T
-    # C_b_n = np.array([[sy*cp,  cr*cy + sr*sy*sp, -sr*cy + cr*sy*sp], 
-    #                   [cy*cp, -cr*sy + sr*cy*sp,  sr*sy + cr*cy*sp], 
-    #                   [   sp,            -sr*cp,            -cr*cp]], dtype=np.double).T
     C_b_n = euler2dcm(config.att/R2D).T
     self.__C_e_ned = ecef2nedDcm(self.__lla0)
     self.__C_e_n = ecef2enuDcm(self.__lla0)
     self.__C_b_e = self.__C_e_ned.T @ C_b_n
-    # self.__C_b_e = self.__C_e_n.T @ C_b_n
     self.__q_b_e = dcm2quat(self.__C_b_e)
     
     # kalman state and covariance
-    self.rx_state = np.zeros(17, dtype=np.double)
-    self.rx_state[-2] = config.clock_bias
-    self.rx_state[-1] = config.clock_drift
-    self.rx_cov = np.diag(np.array([0.03,0.03,0.03,0.05,0.06,0.05,2.0,2.0,2.0,0.01,0.01,0.01,1e-4,1e-4,1e-4,2.0,0.1], dtype=np.double)**2)
+    self.rx_state = np.zeros(11, dtype=np.double)
+    self.rx_cov = np.diag(np.array([0.03,0.03,0.03,0.05,0.06,0.05,2.0,2.0,2.0,2.0,0.1], dtype=np.double)**2)
     self.__is_cov_initialized = False
 
 
@@ -163,8 +158,8 @@ class GnssIns:
   #! === Kalman Filter Time Update (prediction) ===
   def time_update(self, w_ib_b: np.ndarray, f_ib_b: np.ndarray):
     # mechanize imu
-    wb = w_ib_b - self.__gyr_err
-    fb = f_ib_b - self.__acc_err
+    wb = w_ib_b + self.__gyr_err
+    fb = f_ib_b + self.__acc_err
     self.mechanize(wb, fb)
     
     # generate transition matrices
@@ -173,50 +168,86 @@ class GnssIns:
     
     # time update (assumed constant T)
     self.__clk_bias += self.__clk_drift * self.T
-    self.rx_state[-2] = self.__clk_bias
     half_Q = self.__Q/2
     self.rx_cov = self.__F @ (self.rx_cov + half_Q) @ self.__F.T + half_Q
+    # self.rx_cov = self.__F @ self.rx_cov @ self.__F.T + self.__Q
     
   #! === Kalman Filter Measurement Update (correction) ===
-  def measurement_update(self, meas_prange: np.ndarray, meas_prange_rate: np.ndarray):
+  def measurement_update(self, meas_prange: np.ndarray, meas_prange_rate: np.ndarray, emitter_states: dict, wavelength: np.ndarray):
     # generate observation and covariance matrix
-    self.__estimate_cn0()
-    self.__generate_H()
+    # self.__generate_H()
+    self.wavelength = wavelength
     self.__generate_R()
     
     # compute initial covariance if necessary
     if not self.__is_cov_initialized:
+      self.__generate_H()
       self.__initialize_covariance()
       self.__is_cov_initialized = True
       
-    # measurement residuals (half chip spacing to minimize correlation between early and late)
-    # chip_error = dll_error(
-    #     self.__correlators.IE, self.__correlators.QE, self.__correlators.IL, self.__correlators.QL, self.__tap_spacing
-    #   ) * self.__chip_width
-    # freq_error = fll_error(
-    #     self.__correlators.ip1, self.__correlators.ip2, self.__correlators.qp1, self.__correlators.qp2, 3*self.T
-    #   ) * -self.__wavelength
-    # dy = np.concatenate((chip_error, freq_error))
-    dy = np.concatenate((meas_prange - self.__pred_prange, 
-                         meas_prange_rate - self.__pred_prange_rate))
-    
-    # innovation filtering
-    S = self.__H @ self.rx_cov @ self.__H.T + self.__R
-    norm_z = np.abs(dy / np.sqrt(np.diag(S))) # norm_z = np.abs(dy / np.diag(cholesky(S)))
-    pass_idx = np.nonzero(norm_z < self.__innovation_std)[0]
-    self.__H = self.__H[pass_idx,:]
-    self.__R = np.diag(self.__R[pass_idx,pass_idx])
-    dy = dy[pass_idx]
-    
-    # update
-    PHt = self.rx_cov @ self.__H.T
-    K = PHt @ inv(self.__H @ PHt + self.__R)
-    I_KH = np.eye(self.rx_state.size) - K @ self.__H
-    self.rx_cov = (I_KH @ self.rx_cov @ I_KH.T) + (K @ self.__R @ K.T)
-    self.rx_state += K @ dy
-    
+    # iterative levenburg-marquardt extended kalman filter
+    if meas_prange_rate.size > 0:
+      x = self.rx_state.copy()
+      P = self.rx_cov.copy()
+      delta_X = 1
+      mu = 1e-3
+      
+      Z = np.zeros(self.__range_unit_vectors.shape, dtype=np.double)
+      z1 = np.zeros(self.__range_unit_vectors.shape[0], dtype=np.double)
+      i1 = np.ones(self.__range_unit_vectors.shape[0], dtype=np.double)
+      k = 0
+      while (delta_X > 1e-6) and (k < 100):
+        tmp_pos = self.__r_eb_e + x[6:9]
+        tmp_vel = self.__v_eb_e + x[3:6]
+        tmp_clk_drift = self.__clk_drift + x[-1]
+        
+        y_hat = np.zeros(meas_prange_rate.size)
+        ur = Z.copy()
+        uv = Z.copy()
+        for j,emitter in enumerate(emitter_states.values()):
+          dr = emitter.pos - tmp_pos
+          dv = emitter.vel - tmp_vel
+          
+          r = norm(dr)
+          ur[j,:] = dr / r
+          v = ur[j,:] @ dv
+          uv[j,:] = np.cross(ur[j,:], np.cross(ur[j,:], dv/r))
+          y_hat[j] = v + tmp_clk_drift
+          
+        # H = np.block([Z, -ur, uv, Z, Z, z1[:,None], i1[:,None]])
+        H = np.block([Z, -ur, uv, z1[:,None], i1[:,None]])
+        dy = meas_prange_rate - y_hat
+        dx = self.rx_state - x
+        
+        # K = P @ H.T @ inv(H @ P @ H.T + self.__R)
+        # x = self.rx_state + K @ (meas_prange_rate - y_hat - H @ (self.rx_state - x))
+        # delta_X = norm(self.rx_state - x) / norm(x)
+        
+        B = np.diag(np.diag(H.T @ inv(self.__R) @ H + inv(self.rx_cov)))
+        P = (I - self.rx_cov @ inv(self.rx_cov + inv(B)/mu)) @ self.rx_cov
+        K = P @ H.T @ inv(H @ P @ H.T + self.__R)
+        tmp1 = self.rx_state + K @ (dy - H @ dx) - mu*(I - K @ H) @ P @ B @ dx
+        tmp2 = norm(self.rx_state - tmp1) / norm(tmp1)
+        
+        if tmp2 > delta_X:
+          mu *= 5
+        else:
+          mu /= 5
+          x = tmp1
+          delta_X = tmp2
+        
+        k += 1
+          
+      I_KH = I - K @ H
+      self.rx_cov = (I_KH @ self.rx_cov @ I_KH.T) + (K @ self.__R @ K.T)
+      # self.rx_cov = (I - K @ H) @ self.rx_cov
+      self.rx_state = x
+      self.__H = H
+      self.__range_unit_vectors = ur
+      self.__rate_unit_vectors = uv
+        
     # closed loop correction (error state)
-    p0, p1, p2, p3 = 1, *(-self.rx_state[:3]/2)
+    p0, p1, p2, p3 = 1, *(self.rx_state[:3]/2)
     q0, q1, q2, q3 = self.__q_b_e
     self.__q_b_e = np.array(
                       [(p0*q0 - p1*q1 - p2*q2 - p3*q3), 
@@ -226,13 +257,14 @@ class GnssIns:
                     )
     self.__C_b_e = quat2dcm(self.__q_b_e)
     # self.__C_b_e = (I3 - skew(self.rx_state[:3])) @ self.__C_b_e
-    self.__v_eb_e -= self.rx_state[3:6]
-    self.__r_eb_e -= self.rx_state[6:9]
-    self.__acc_err += self.rx_state[9:12]
-    self.__gyr_err += self.rx_state[12:15]
-    self.__clk_bias = self.rx_state[-2]
-    self.__clk_drift = self.rx_state[-1]
-    self.rx_state[:15] = np.zeros(15)
+    self.__v_eb_e += self.rx_state[3:6]
+    self.__r_eb_e += self.rx_state[6:9]
+    self.__clk_bias += self.rx_state[-2]
+    self.__clk_drift += self.rx_state[-1]
+    # self.__acc_err += self.rx_state[9:12]
+    # self.__gyr_err += self.rx_state[12:15]
+    self.rx_state = np.zeros(11)
+    
 
   #! ===IMU Mechanization (ECEF Frame) ===
   def mechanize(self, w_ib_b: np.ndarray, f_ib_b: np.ndarray):
@@ -268,41 +300,6 @@ class GnssIns:
     self.__C_b_e = quat2dcm(self.__q_b_e)
     C_avg = quat2dcm((q_old + self.__q_b_e)/2)
     
-    # # (Groves 2.145) determine earth rotation over update interval
-    # alpha_ie = GNSS_OMEGA_EARTH * self.T
-    # sin_aie = np.sin(alpha_ie)
-    # cos_aie = np.cos(alpha_ie)
-    # C_earth = np.array([[ cos_aie, sin_aie, 0.0], \
-    #                     [-sin_aie, cos_aie, 0.0], \
-    #                     [     0.0,     0.0, 1.0]])
-    
-    # # attitude increment
-    # alpha = w_ib_b * self.T
-    # alpha_n = np.linalg.norm(alpha) # norm of alpha
-    # Alpha = skew(alpha)             # skew symmetric form of alpha
-    
-    # # (Groves 5.73) obtain dcm from new->old attitude
-    # sina = np.sin(alpha_n)
-    # cosa = np.cos(alpha_n)
-    # if alpha_n > 1.0e-8:
-    #   C_new_old = I3 + (sina / alpha_n * Alpha) + \
-    #                     ((1 - cosa) / alpha_n**2 * Alpha @ Alpha)
-    # else:
-    #   C_new_old = I3 + Alpha
-    
-    # # (Groves 5.75) attitude update
-    # C_new = C_earth @ self.__C_b_e @ C_new_old
-
-    # # (Groves 5.84/5.85) calculate average body-to-ECEF dcm
-    # Alpha_ie = skew(np.array([0.0, 0.0, alpha_ie]))
-    # if alpha_n > 1.0e-8:
-    #   C_avg = self.__C_b_e @ (I3 + ((1 - cosa) / alpha_n**2 \
-    #                        * Alpha) + ((1 - sina / alpha_n) / alpha_n**2 \
-    #                        * Alpha @ Alpha)) - (0.5 * Alpha_ie @ self.__C_b_e)
-    # else:
-    #   C_avg = self.__C_b_e - 0.5 * Alpha_ie @ self.__C_b_e
-    # self.__C_b_e = C_new
-    
     # (Groves 5.85) specific force transformation body-to-ECEF
     f_ib_e = C_avg@f_ib_b
 
@@ -321,8 +318,8 @@ class GnssIns:
     self.__rate_unit_vectors = np.zeros((n,3), dtype=np.double)
     self.__pred_prange = np.zeros(n, dtype=np.double)
     self.__pred_prange_rate = np.zeros(n, dtype=np.double)
-    self.__range_avbl = np.zeros(n, dtype=bool)
-    self.__rate_avbl = np.zeros(n, dtype=bool)
+    # self.__range_avbl = np.zeros(n, dtype=bool)
+    # self.__rate_avbl = np.zeros(n, dtype=bool)
 
     for j,emitter in enumerate(emitter_states.values()):
       dr = emitter.pos - self.__r_eb_e
@@ -378,13 +375,19 @@ class GnssIns:
     F34 = 1/2*self.__C_b_e*self.T**2 - 1/3*OC*self.T**3
     F35 = 1/6*FC*self.T**3
     
+    # self.__F = np.block(
+    #             [[F11, Z33, Z33, Z33, F15, Z32],
+    #              [F21, F22, F23, F24, F25, Z32], 
+    #              [F31, F32,  I3, F34, F35, Z32], 
+    #              [Z33, Z33, Z33,  I3, Z33, Z32], 
+    #              [Z33, Z33, Z33, Z33,  I3, Z32], 
+    #              [Z23, Z23, Z23, Z23, Z23, self.__clk_f]]
+    #           )
     self.__F = np.block(
-                [[F11, Z33, Z33, Z33, F15, Z32],
-                 [F21, F22, F23, F24, F25, Z32], 
-                 [F31, F32,  I3, F34, F35, Z32], 
-                 [Z33, Z33, Z33,  I3, Z33, Z32], 
-                 [Z33, Z33, Z33, Z33,  I3, Z32], 
-                 [Z23, Z23, Z23, Z23, Z23, self.__clk_f]]
+                [[F11, Z33, Z33, Z32],
+                 [F21, F22, F23, Z32], 
+                 [F31, F32,  I3, Z32], 
+                 [Z23, Z23, Z23, self.__clk_f]]
               )
     
   #! === Process Noise Covariance ===
@@ -406,13 +409,19 @@ class GnssIns:
     Q44 = self.__Sbad*self.T*I3
     Q55 = self.__Sbgd*self.T*I3
     
+    # self.__Q = np.block(
+    #             [[Q11, Q21.T, Q31.T, Z33, Q15, Z32], \
+    #              [Q21,   Q22, Q32.T, Q24, Q25, Z32], \
+    #              [Q31,   Q32,   Q33, Q34, Q35, Z32], \
+    #              [Z33,   Q24, Q34.T, Q44, Z33, Z32], \
+    #              [Q15, Q25.T, Q35.T, Z33, Q55, Z32], \
+    #              [Z23,   Z23,   Z23, Z23, Z23, self.__clk_q]], \
+    #           )
     self.__Q = np.block(
-                [[Q11, Q21.T, Q31.T, Z33, Q15, Z32], \
-                 [Q21,   Q22, Q32.T, Q24, Q25, Z32], \
-                 [Q31,   Q32,   Q33, Q34, Q35, Z32], \
-                 [Z33,   Q24, Q34.T, Q44, Z33, Z32], \
-                 [Q15, Q25.T, Q35.T, Z33, Q55, Z32], \
-                 [Z23,   Z23,   Z23, Z23, Z23, self.__clk_q]], \
+                [[Q11, Q21.T, Q31.T, Z32], \
+                 [Q21,   Q22, Q32.T, Z32], \
+                 [Q31,   Q32,   Q33, Z32], \
+                 [Z23,   Z23,   Z23, self.__clk_q]], \
               )
     
   #! === Observation Matrix ===
@@ -420,25 +429,13 @@ class GnssIns:
     Z = np.zeros(self.__range_unit_vectors.shape, dtype=np.double)
     z1 = np.zeros(self.__range_unit_vectors.shape[0], dtype=np.double)
     i1 = np.ones(self.__range_unit_vectors.shape[0], dtype=np.double)
-    self.__H = np.block(
-                [[Z,                         Z, self.__range_unit_vectors, Z, Z, i1[:,None], z1[:,None]], 
-                 [Z, self.__range_unit_vectors,  self.__rate_unit_vectors, Z, Z, z1[:,None], i1[:,None]]]
-              )
-    # self.__H = np.block(
-    #             [[Z,                         Z, self.__range_unit_vectors, Z, Z, i1[:,None], z1[:,None]], 
-    #              [Z, self.__range_unit_vectors,                         Z, Z, Z, z1[:,None], i1[:,None]]]
-    #           )
-    # self.__H = np.block(
-    #             [[Z,                         Z,                         Z, Z, Z, z1[:,None], z1[:,None]], 
-    #              [Z, self.__range_unit_vectors,  self.__rate_unit_vectors, Z, Z, z1[:,None], i1[:,None]]]
-    #           )
+    
+    # self.__H = np.block([Z, -self.__range_unit_vectors,  -self.__rate_unit_vectors, Z, Z, z1[:,None], i1[:,None]])
+    self.__H = np.block([Z, -self.__range_unit_vectors,  self.__rate_unit_vectors, z1[:,None], i1[:,None]])
     
   #! === Measurement Noise Covariance ===
   def __generate_R(self):
-    self.__R = np.diag( 
-                np.concatenate((prange_residual_var(self.cn0, 3*self.T, self.__chip_width), 
-                                prange_rate_residual_var(self.cn0, 3*self.T, self.__wavelength))) 
-              )
+    self.__R = np.diag(prange_rate_residual_var(self.cn0, 0.02, self.wavelength))
     
 
 #--------------------------------------------------------------------------------------------------#
@@ -455,13 +452,13 @@ class GnssIns:
             ip_tmp[:,i], 
             qp_tmp[:,i], 
             self.cn0[i], 
-            3*self.T
+            self.T_rcvr
           )
         # self.cn0[i] = CN0_beaulieu_estimator(
         #     ip_tmp[:,i], 
         #     qp_tmp[:,i], 
         #     self.cn0[i], 
-        #     3*self.T,
+        #     self.T_rcvr,
         #     False,
         #   )
       self.__cn0_counter = 0
@@ -470,17 +467,18 @@ class GnssIns:
 
   #! === Initialize Receiver Covariance Matrix ===
   def __initialize_covariance(self):
-    I = np.eye(self.__F.shape[0])
     delta_diag_P = np.diag(self.rx_cov)
 
-    while np.any(delta_diag_P > 1e-4):
+    k = 0
+    while np.any(delta_diag_P > 1e-4) and (k < 100):
       previous_P = self.rx_cov
 
       self.rx_cov = self.__F @ self.rx_cov @ self.__F.T + self.__Q
       K = self.rx_cov @ self.__H.T @ inv(self.__H @ self.rx_cov @ self.__H.T + self.__R)
       self.rx_cov = (I - K @ self.__H) @ self.rx_cov @ (I - K @ self.__H).T + K @ self.__R @ K.T
 
-      delta_diag_P = np.diag(previous_P - self.rx_cov)
+      delta_diag_P = np.abs(np.diag(previous_P - self.rx_cov))
+      k += 1
       
-    self.rx_cov *= 10
+    # self.rx_cov *= 10
     

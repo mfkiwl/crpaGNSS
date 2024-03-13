@@ -11,7 +11,7 @@ from navsim.simulations.ins import INSSimulation
 from navsim.simulations.measurement import MeasurementSimulation
 from navsim.error_models.imu import HG1700, IMU
 
-from charlizard.navigators.soop_ins import GnssIns
+from charlizard.navigators.gnss_ins import GnssIns
 from charlizard.navigators.structures import GNSSINSConfig
 from charlizard.models.correlators import correlator_error, correlator_model
 from charlizard.models.discriminator import prange_rate_residual_var, prange_residual_var
@@ -113,6 +113,7 @@ gnss_ins_config = GNSSINSConfig(
     clock_type = 'high_quality_tcxo',
     imu_model = 'hg1700',
     coupling = 'tight',
+    T_rcvr = 0.02,
   )
 
 f_update = int((1 / ins_sim.time[1]) / (1 / meas_sim.time[1]))

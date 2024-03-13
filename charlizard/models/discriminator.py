@@ -109,7 +109,10 @@ def prange_residual_var(cn0: float | np.ndarray, T: float, chip_width: float) ->
   """
   
   raw_cn0 = 10**(0.1*cn0)
-  return chip_width**2 * ( (1 / (2 * T**2 * raw_cn0**2)) + (1 / (4 * T * raw_cn0)) )
+  # return chip_width**2 * ( (1 / (2 * T**2 * raw_cn0**2)) + (1 / (4 * T * raw_cn0)) )
+  bw = 2
+  d = 0.5
+  return  chip_width**2 * (4*d**2*bw/raw_cn0 * (2*(1-d) + 4*d/(T*raw_cn0)))
 
 
 # === prange_rate_residual_var ===
@@ -133,7 +136,9 @@ def prange_rate_residual_var(cn0: float | np.ndarray, T: float, wavelength: floa
   """
   
   raw_cn0 = 10**(0.1*cn0)
-  return (wavelength / (GNSS_PI * T))**2 * ( (2 / (T * raw_cn0)) + (2 / (T**2 * raw_cn0**2)) )
+#   return (wavelength / (GNSS_PI * T))**2 * ( (2 / (T * raw_cn0)) + (2 / (T**2 * raw_cn0**2)) )
+  bw = 18
+  return (wavelength/(2*np.pi*T))**2 * (4*bw/raw_cn0 * (1+1/(T*raw_cn0)))
 
 
 # === pll_var ===

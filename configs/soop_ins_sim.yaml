@@ -1,32 +1,32 @@
 time:
-  duration: 204.49
+  # duration: 204.49
+  # duration: 1800.0
+  duration: 15
   fsim: 1 # [Hz]
   year: 2024
   month: 1
-  day: 31
-  hour: 1
-  minute: 19
-  second: 18
+  day: 1
+  hour: 12
+  minute: 0
+  second: 0
 
 constellations:
   mask_angle: 5.0 # [deg]
   emitters:
-    gps:
-      signal: gpsl1ca
-      js: 0.0
-      correlator_model: bpsk
     # iridium-next:
-    #   signal: gpsl1ca
-    #   js: 0.0
-    #   correlator_model: bpsk
+    #   signal: iridium
+    # orbcomm:
+    #   signal: orbcomm
+    buoy:
+      signal: buoy
 
 errors:
   # ionosphere: klobuchar
   # troposphere: saastamoinen
-  rx_clock: high_quality_tcxo
+  rx_clock: ocxo
 
 imu:
-  model: consumer
+  model: hg1700
   osr: 10
   mobility: [3.0, 1.5, 6.0]
   # vibration_model: sinusoidal

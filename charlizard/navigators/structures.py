@@ -53,7 +53,7 @@ class VDFLLConfig:
   
 @dataclass
 class GNSSINSConfig:
-  T: float                        #! integration period [s]
+  T: float                        #! integration period for the imu [s]
   tap_spacing: float              #! early,prompt,late correlator tap/chip spacing
   innovation_stdev: float         #! normalized innovation filter threshold
   cn0_buffer_len: int             #! number of correlator outputs to use in cn0 estimation
@@ -66,5 +66,6 @@ class GNSSINSConfig:
   clock_type: str                 #! receiver oscillator type
   imu_model: str                  #! IMU specifications
   coupling: str                   #! navigator coupling scheme ('tight' or 'deep')
+  T_rcvr: int                     #! integration period of the receiver [s]
 
   
