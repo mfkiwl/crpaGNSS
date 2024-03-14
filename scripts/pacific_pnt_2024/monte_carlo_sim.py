@@ -39,7 +39,7 @@ N_RUNS = 2
 PROJECT_PATH = Path(__file__).parents[2]
 RESULTS_PATH = PROJECT_PATH / "results" / "pacific_pnt"
 # SCENARIOS = ["leo", "buoy", "leo_and_buoy", "imu"]
-SCENARIOS = ["leo", "imu"]
+SCENARIOS = ["leo"]
 
 
 # * map scenario to actual emitters used
