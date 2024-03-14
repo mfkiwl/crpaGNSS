@@ -1,7 +1,6 @@
 time:
   # duration: 204.49
-  # duration: 1800.0
-  duration: 15
+  duration: 1799.0
   fsim: 1 # [Hz]
   year: 2024
   month: 1
@@ -13,10 +12,10 @@ time:
 constellations:
   mask_angle: 5.0 # [deg]
   emitters:
-    # iridium-next:
-    #   signal: iridium
-    # orbcomm:
-    #   signal: orbcomm
+    iridium-next:
+      signal: iridium
+    orbcomm:
+      signal: orbcomm
     buoy:
       signal: buoy
 
@@ -30,3 +29,7 @@ imu:
   osr: 10
   mobility: [3.0, 1.5, 6.0]
   # vibration_model: sinusoidal
+
+# 22.0,-125.4
+# 47.0,-167.5
+# -28.8,-7.7
