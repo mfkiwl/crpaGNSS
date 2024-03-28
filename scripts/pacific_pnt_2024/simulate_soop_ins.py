@@ -2,6 +2,7 @@ import numpy as np
 from tqdm import tqdm
 from pathlib import Path
 from log_utils import *
+from datetime import datetime, timedelta, timezone
 
 from navsim.configuration import get_configuration, SimulationConfiguration
 from navsim.simulations.measurement import MeasurementSimulation
@@ -35,8 +36,37 @@ def run_simulation(
     measurement_update: bool = True,
     DISABLE_PROGRESS: bool = True,
 ):
+    # * INITIALIZE SOOP INS FILTER
+    soop_ins_config = GNSSINSConfig(
+        T=1 / ins_sim.imu_model.f,
+        tap_spacing=0.5,
+        innovation_stdev=3,
+        cn0_buffer_len=100,
+        cn0=np.array([emitter.cn0 for emitter in meas_sim.observables[0].values()]),
+        pos=ins_sim.ecef_position[0, :],
+        vel=ins_sim.ecef_velocity[0, :],
+        att=ins_sim.euler_angles[0, :],
+        clock_bias=meas_sim.rx_states.clock_bias[0],
+        clock_drift=meas_sim.rx_states.clock_drift[0],
+        clock_type=config.errors.rx_clock,
+        imu_model=config.imu.model,
+        coupling="tight",
+        T_rcvr=0.2,
+    )
+    f_sim = int(config.time.fsim)
+    f_update = 10
+
+    # * INITIALIZE SIMULATION
+    soop_ins = SoopIns(soop_ins_config)
+    time = datetime(
+        config.time.year, config.time.month, config.time.day, config.time.hour, config.time.minute, config.time.second
+    ).replace(tzinfo=timezone.utc)
+    delta = timedelta(seconds=0.2)
+    delta2 = timedelta(seconds=0.4)
+    sim_delta = timedelta(seconds=1 / f_sim)
+
     # * INITIALIZE OUTPUTS
-    n = len(meas_sim.observables)
+    n = int(len(meas_sim.observables) / f_update)
     results = {
         "lla": np.zeros((n, 3)),
         "position": np.zeros((n, 3)),
@@ -54,28 +84,10 @@ def run_simulation(
         "dop": np.zeros((n, 6)),
     }
 
-    soop_ins_config = GNSSINSConfig(
-        T=1 / ins_sim.imu_model.f,
-        tap_spacing=0.5,
-        innovation_stdev=3,
-        cn0_buffer_len=100,
-        cn0=np.array([emitter.cn0 for emitter in meas_sim.observables[0].values()]),
-        pos=ins_sim.ecef_position[0, :] + np.random.randn(3) * 0.3,
-        vel=ins_sim.ecef_velocity[0, :] + np.random.randn(3) * 0.01,
-        att=ins_sim.euler_angles[0, :] + np.random.randn(3) * 0.1,
-        clock_bias=meas_sim.rx_states.clock_bias[0],
-        clock_drift=meas_sim.rx_states.clock_drift[0],
-        clock_type=config.errors.rx_clock,
-        imu_model=config.imu.model,
-        coupling="tight",
-        T_rcvr=1 / config.time.fsim,
-    )
-    f_update = int(ins_sim.imu_model.f / config.time.fsim)
-
     # * RUN SIMULATION
-    soop_ins = SoopIns(soop_ins_config)
-    j = 0
-    for i in tqdm(
+    # sim_idx = 1
+    out_idx = 0
+    for imu_idx in tqdm(
         range(ins_sim.time.size),
         total=ins_sim.time.size,
         desc=default_logger.GenerateSring("[charlizard] SOOP-INS ", Level.Info, Color.Info),
@@ -85,70 +97,77 @@ def run_simulation(
         ncols=120,
     ):
         # time update
-        # soop_ins.time_update(ins_sim.true_angular_velocity[i,:], ins_sim.true_specific_force[i,:])
-        soop_ins.time_update(ins_sim.angular_velocity[i, :], ins_sim.specific_force[i, :])
+        # soop_ins.time_update(ins_sim.true_angular_velocity[imu_idx, :], ins_sim.true_specific_force[imu_idx, :])
+        soop_ins.time_update(ins_sim.angular_velocity[imu_idx, :], ins_sim.specific_force[imu_idx, :])
 
-        if i % f_update == 0:
+        if imu_idx % f_update == 0:  # and (imu_idx > 0):
             # grab true values from path simulator
-            true_cn0 = np.array([emitter.cn0 for emitter in meas_sim.observables[j].values()])
-            true_clock = np.array(
-                [
-                    meas_sim.rx_states.clock_bias[j],
-                    meas_sim.rx_states.clock_drift[j],
-                ]
-            )
-            wavelength = np.array(
-                [
-                    meas_sim.signal_properties[emitter.constellation].wavelength
-                    for emitter in meas_sim.observables[j].values()
-                ]
-            )
-
-            # always predict to update H matrix
-            pranges, prange_rates = soop_ins.predict_observables(meas_sim.emitter_states.truth[j])
+            true_clock = np.array([meas_sim.rx_states.clock_bias[imu_idx], meas_sim.rx_states.clock_drift[imu_idx]])
 
             # measurement update
             if measurement_update:
+                # ? check if observables are available, sort by key
+                keys = meas_sim.observables[imu_idx].keys()
+                emitter_states = dict(sorted(meas_sim.emitter_states.truth[imu_idx].items()))
+                observables = dict(sorted(meas_sim.observables[imu_idx].items()))
+                # emitters = []
+
+                emitters = [e for e in meas_sim._MeasurementSimulation__emitters._skyfield_satellites if e.name in keys]
+                names = [e.name for e in emitters]
+                emitters = [emitters[i] for i in sorted(range(len(names)), key=lambda index: names[index])]
+                times = [time - delta2, time - delta, time, time + delta, time + delta2]
+                times = meas_sim._MeasurementSimulation__emitters._ts.from_datetimes(times)
+
                 # update filter with new observables
-                soop_ins.cn0 = true_cn0
-                meas_pranges = np.zeros(true_cn0.size)
-                meas_prange_rates = np.array(
-                    [emitter.pseudorange_rate for emitter in meas_sim.observables[j].values()]
-                ) + np.random.randn(true_cn0.size) * prange_rate_residual_var(
-                    true_cn0, 0.02, wavelength
+                wavelength = np.array(
+                    [
+                        SPEED_OF_LIGHT / meas_sim.signal_properties[emitter.constellation].fcarrier
+                        for emitter in observables.values()
+                    ]
                 )
+                soop_ins.cn0 = np.array([emitter.cn0 for emitter in observables.values()])
+                meas_prange_rates = np.array([emitter.pseudorange_rate for emitter in observables.values()])
+                noise = np.random.randn(soop_ins.cn0.size) * prange_rate_residual_var(soop_ins.cn0, 0.02, wavelength)
+
                 soop_ins.measurement_update(
-                    meas_pranges,
-                    meas_prange_rates,
-                    meas_sim.emitter_states.truth[j],
+                    noise,
+                    emitter_states,
                     wavelength,
+                    ins_sim.ecef_position[imu_idx, :],
+                    ins_sim.ecef_velocity[imu_idx, :],
+                    true_clock / SPEED_OF_LIGHT,
+                    emitters,
+                    times,
                 )
 
             # * LOG RESULTS
             (
-                results["position"][j, :],
-                results["velocity"][j, :],
-                results["attitude"][j, :],
-                results["lla"][j, :],
-                results["clock"][j, :],
+                results["position"][out_idx, :],
+                results["velocity"][out_idx, :],
+                results["attitude"][out_idx, :],
+                results["lla"][out_idx, :],
+                results["clock"][out_idx, :],
             ) = soop_ins.extract_states
-            results["position_error"][j, :] = (
-                ins_sim.tangent_position[i, :] - results["position"][j, :]
+            results["position_error"][out_idx, :] = (
+                ins_sim.tangent_position[imu_idx, :] - results["position"][out_idx, :]
             )
-            results["velocity_error"][j, :] = (
-                ins_sim.tangent_velocity[i, :] - results["velocity"][j, :]
+            results["velocity_error"][out_idx, :] = (
+                ins_sim.tangent_velocity[imu_idx, :] - results["velocity"][out_idx, :]
             )
-            results["attitude_error"][j, :] = ins_sim.euler_angles[i, :] - results["attitude"][j, :]
-            results["clock_error"][j, :] = true_clock - results["clock"][j, :]
+            results["attitude_error"][out_idx, :] = ins_sim.euler_angles[imu_idx, :] - results["attitude"][out_idx, :]
+            results["clock_error"][out_idx, :] = true_clock - results["clock"][out_idx, :]
             (
-                results["position_std_filter"][j, :],
-                results["velocity_std_filter"][j, :],
-                results["attitude_std_filter"][j, :],
-                results["clock_std_filter"][j, :],
+                results["position_std_filter"][out_idx, :],
+                results["velocity_std_filter"][out_idx, :],
+                results["attitude_std_filter"][out_idx, :],
+                results["clock_std_filter"][out_idx, :],
             ) = soop_ins.extract_stds
-            results["dop"][j, :] = soop_ins.extract_dops
+            results["dop"][out_idx, :] = soop_ins.extract_dops
 
-            j += 1
+            out_idx += 1
+            # print(time)
+            time += sim_delta
+            # sim_idx += 1
 
     return results
 
@@ -162,11 +181,10 @@ if __name__ == "__main__":
     ins_sim.simulate()
 
     f_rcvr = config.time.fsim
-    f_update = int(ins_sim.imu_model.f / f_rcvr)
+    f_update = 10
     meas_sim = MeasurementSimulation(config)
-    meas_sim.generate_truth(
-        ins_sim.ecef_position[::f_update, :], ins_sim.ecef_velocity[::f_update, :]
-    )
+    # meas_sim.generate_truth(ins_sim.ecef_position[::f_update, :], ins_sim.ecef_velocity[::f_update, :])
+    meas_sim.generate_truth(ins_sim.ecef_position, ins_sim.ecef_velocity)
     meas_sim.simulate()
 
     results = run_simulation(config, meas_sim, ins_sim, MEAS_UPDATE, DISABLE_PROGRESS)
@@ -182,34 +200,34 @@ if __name__ == "__main__":
     h1.suptitle("ENU Position Error")
     ax1[0].plot(
         ins_sim.time[::f_update],
-        results["position_error"][:, 0] + 3 * results["position_error"][:, 0],
+        results["position_error"][:, 0] + 3 * results["position_std_filter"][:, 0],
         "r",
     )
     ax1[0].plot(
         ins_sim.time[::f_update],
-        results["position_error"][:, 0] - 3 * results["position_error"][:, 0],
+        results["position_error"][:, 0] - 3 * results["position_std_filter"][:, 0],
         "r",
     )
     ax1[0].plot(ins_sim.time[::f_update], results["position_error"][:, 0], "k")
     ax1[1].plot(
         ins_sim.time[::f_update],
-        results["position_error"][:, 1] + 3 * results["position_error"][:, 1],
+        results["position_error"][:, 1] + 3 * results["position_std_filter"][:, 1],
         "r",
     )
     ax1[1].plot(
         ins_sim.time[::f_update],
-        results["position_error"][:, 1] - 3 * results["position_error"][:, 1],
+        results["position_error"][:, 1] - 3 * results["position_std_filter"][:, 1],
         "r",
     )
     ax1[1].plot(ins_sim.time[::f_update], results["position_error"][:, 1], "k")
     ax1[2].plot(
         ins_sim.time[::f_update],
-        results["position_error"][:, 2] + 3 * results["position_error"][:, 2],
+        results["position_error"][:, 2] + 3 * results["position_std_filter"][:, 2],
         "r",
     )
     ax1[2].plot(
         ins_sim.time[::f_update],
-        results["position_error"][:, 2] - 3 * results["position_error"][:, 2],
+        results["position_error"][:, 2] - 3 * results["position_std_filter"][:, 2],
         "r",
     )
     ax1[2].plot(ins_sim.time[::f_update], results["position_error"][:, 2], "k")
@@ -225,34 +243,34 @@ if __name__ == "__main__":
     h2.suptitle("ENU Velocity Error")
     ax2[0].plot(
         ins_sim.time[::f_update],
-        results["velocity_error"][:, 0] + 3 * results["velocity_error"][:, 0],
+        results["velocity_error"][:, 0] + 3 * results["velocity_std_filter"][:, 0],
         "r",
     )
     ax2[0].plot(
         ins_sim.time[::f_update],
-        results["velocity_error"][:, 0] - 3 * results["velocity_error"][:, 0],
+        results["velocity_error"][:, 0] - 3 * results["velocity_std_filter"][:, 0],
         "r",
     )
     ax2[0].plot(ins_sim.time[::f_update], results["velocity_error"][:, 0], "k")
     ax2[1].plot(
         ins_sim.time[::f_update],
-        results["velocity_error"][:, 1] + 3 * results["velocity_error"][:, 1],
+        results["velocity_error"][:, 1] + 3 * results["velocity_std_filter"][:, 1],
         "r",
     )
     ax2[1].plot(
         ins_sim.time[::f_update],
-        results["velocity_error"][:, 1] - 3 * results["velocity_error"][:, 1],
+        results["velocity_error"][:, 1] - 3 * results["velocity_std_filter"][:, 1],
         "r",
     )
     ax2[1].plot(ins_sim.time[::f_update], results["velocity_error"][:, 1], "k")
     ax2[2].plot(
         ins_sim.time[::f_update],
-        results["velocity_error"][:, 2] + 3 * results["velocity_error"][:, 2],
+        results["velocity_error"][:, 2] + 3 * results["velocity_std_filter"][:, 2],
         "r",
     )
     ax2[2].plot(
         ins_sim.time[::f_update],
-        results["velocity_error"][:, 2] - 3 * results["velocity_error"][:, 2],
+        results["velocity_error"][:, 2] - 3 * results["velocity_std_filter"][:, 2],
         "r",
     )
     ax2[2].plot(ins_sim.time[::f_update], results["velocity_error"][:, 2], "k")
@@ -270,34 +288,34 @@ if __name__ == "__main__":
     h3.suptitle("RPY Attitude Error")
     ax3[0].plot(
         ins_sim.time[::f_update],
-        results["attitude_error"][:, 0] + 3 * results["attitude_error"][:, 0],
+        results["attitude_error"][:, 0] + 3 * results["attitude_std_filter"][:, 0],
         "r",
     )
     ax3[0].plot(
         ins_sim.time[::f_update],
-        results["attitude_error"][:, 0] - 3 * results["attitude_error"][:, 0],
+        results["attitude_error"][:, 0] - 3 * results["attitude_std_filter"][:, 0],
         "r",
     )
     ax3[0].plot(ins_sim.time[::f_update], results["attitude_error"][:, 0], "k")
     ax3[1].plot(
         ins_sim.time[::f_update],
-        results["attitude_error"][:, 1] + 3 * results["attitude_error"][:, 1],
+        results["attitude_error"][:, 1] + 3 * results["attitude_std_filter"][:, 1],
         "r",
     )
     ax3[1].plot(
         ins_sim.time[::f_update],
-        results["attitude_error"][:, 1] - 3 * results["attitude_error"][:, 1],
+        results["attitude_error"][:, 1] - 3 * results["attitude_std_filter"][:, 1],
         "r",
     )
     ax3[1].plot(ins_sim.time[::f_update], results["attitude_error"][:, 1], "k")
     ax3[2].plot(
         ins_sim.time[::f_update],
-        results["attitude_error"][:, 2] + 3 * results["attitude_error"][:, 2],
+        results["attitude_error"][:, 2] + 3 * results["attitude_std_filter"][:, 2],
         "r",
     )
     ax3[2].plot(
         ins_sim.time[::f_update],
-        results["attitude_error"][:, 2] - 3 * results["attitude_error"][:, 2],
+        results["attitude_error"][:, 2] - 3 * results["attitude_std_filter"][:, 2],
         "r",
     )
     ax3[2].plot(ins_sim.time[::f_update], results["attitude_error"][:, 2], "k")
@@ -313,23 +331,23 @@ if __name__ == "__main__":
     h4.suptitle("Clock Errors")
     ax4[0].plot(
         ins_sim.time[::f_update],
-        results["clock_error"][:, 0] + 3 * results["clock_error"][:, 0],
+        results["clock_error"][:, 0] + 3 * results["clock_std_filter"][:, 0],
         "r",
     )
     ax4[0].plot(
         ins_sim.time[::f_update],
-        results["clock_error"][:, 0] - 3 * results["clock_error"][:, 0],
+        results["clock_error"][:, 0] - 3 * results["clock_std_filter"][:, 0],
         "r",
     )
     ax4[0].plot(ins_sim.time[::f_update], results["clock_error"][:, 0], "k")
     ax4[1].plot(
         ins_sim.time[::f_update],
-        results["clock_error"][:, 1] + 3 * results["clock_error"][:, 1],
+        results["clock_error"][:, 1] + 3 * results["clock_std_filter"][:, 1],
         "r",
     )
     ax4[1].plot(
         ins_sim.time[::f_update],
-        results["clock_error"][:, 1] - 3 * results["clock_error"][:, 1],
+        results["clock_error"][:, 1] - 3 * results["clock_std_filter"][:, 1],
         "r",
     )
     ax4[1].plot(ins_sim.time[::f_update], results["clock_error"][:, 1], "k")
