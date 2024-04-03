@@ -14,6 +14,7 @@
 |==================================================================================================|
 """
 
+import os
 import numpy as np
 import pandas as pd
 from scipy.linalg import norm
@@ -23,15 +24,17 @@ import seaborn as sns
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.ticker import MaxNLocator
 
 import navtools as nt
 
+N_RUNS = 100
 
 PROJECT_PATH = Path(__file__).parents[2]
 RESULTS_PATH = PROJECT_PATH / "results" / "pacific_pnt"
 FIGURES_PATH = RESULTS_PATH / "figures"
-# SCENARIOS = ["leo", "buoy", "leo_and_buoy", "imu"]
-SCENARIOS = ["imu"]
+SCENARIOS = ["leo", "buoy", "leo_and_buoy", "imu"]
+# SCENARIOS = ["buoy"]
 nt.io.ensure_exist(FIGURES_PATH)
 
 bold_font = {"fontweight": "bold", "fontsize": 20}
@@ -60,6 +63,7 @@ def plot_individual(show: bool = False, save: bool = True):
         # retrieve data from 'npz' file
         data = load_data(RESULTS_PATH / scenario)
         t = data["time"]
+        title = scenario.replace("_", " ").replace(" and ", "+").upper()
 
         # plot position rmse values on one plot
         f_p_rmse, ax_p_rmse = plt.subplots(**{"figsize": (10, 5)})
@@ -69,10 +73,9 @@ def plot_individual(show: bool = False, save: bool = True):
         sns.lineplot(x=t, y=d[:, 1], ax=ax_p_rmse, label="North", marker="o", markevery=100)
         sns.lineplot(x=t, y=d[:, 2], ax=ax_p_rmse, label="Up", marker=">", markevery=100)
         sns.lineplot(x=t, y=pos_norm, ax=ax_p_rmse, label="Norm", linestyle="--")
-        ax_p_rmse.set(xlabel="Time [s]", ylabel="RMSE [m]")
-        ax_p_rmse.set_title(f"{scenario.replace('_', ' ').replace(' and ', '+').upper()} Position RMSE", **bold_font)
-        ax_p_rmse.legend(loc="upper left")
-        ax_p_rmse.set_axisbelow(True)
+        ax_p_rmse.set(xlabel="Time [s]", ylabel="RMSE [m]", yscale="log")
+        ax_p_rmse.set_title(f"{title} Position RMSE", **bold_font)
+        ax_p_rmse.legend()
         f_p_rmse.tight_layout()
 
         # plot velocity rmse values on one plot
@@ -83,188 +86,175 @@ def plot_individual(show: bool = False, save: bool = True):
         sns.lineplot(x=t, y=d[:, 1], ax=ax_v_rmse, label="North", marker="o", markevery=100)
         sns.lineplot(x=t, y=d[:, 2], ax=ax_v_rmse, label="Up", marker=">", markevery=100)
         sns.lineplot(x=t, y=vel_norm, ax=ax_v_rmse, label="Norm", linestyle="--")
-        ax_v_rmse.set(xlabel="Time [s]", ylabel="RMSE [m/s]")
-        ax_v_rmse.set_title(f"{scenario.replace('_', ' ').replace(' and ', '+').upper()} Velocity RMSE", **bold_font)
-        ax_v_rmse.legend(loc="upper left")
-        ax_v_rmse.set_axisbelow(True)
+        ax_v_rmse.set(xlabel="Time [s]", ylabel="RMSE [m/s]", yscale="log")
+        ax_v_rmse.set_title(f"{title} Velocity RMSE", **bold_font)
+        ax_v_rmse.legend()
         f_v_rmse.tight_layout()
 
-        # plot attitude rmse values on one plot
-        f_a_rmse, ax_a_rmse = plt.subplots(**{"figsize": (10, 5)})
-        att_norm = norm(data["attitude_rmse"], axis=1)
-        d = data["attitude_rmse"]
-        sns.lineplot(x=t, y=d[:, 0], ax=ax_a_rmse, label="East", marker="s", markevery=100, markersize=8)
-        sns.lineplot(x=t, y=d[:, 1], ax=ax_a_rmse, label="North", marker="o", markevery=100)
-        sns.lineplot(x=t, y=d[:, 2], ax=ax_a_rmse, label="Up", marker=">", markevery=100)
-        sns.lineplot(x=t, y=att_norm, ax=ax_a_rmse, label="Norm", linestyle="--")
-        ax_a_rmse.set(xlabel="Time [s]", ylabel="RMSE [°]")
-        ax_a_rmse.set_title(f"{scenario.replace('_', ' ').replace(' and ', '+').upper()} Attitude RMSE", **bold_font)
-        ax_a_rmse.legend(loc="upper left")
-        f_a_rmse.tight_layout()
-
-        # plot clock rmse values on one plot
-        f_c_rmse, ax_c_rmse = plt.subplots(nrows=2, ncols=1, **{"figsize": (10, 7)})
-        sns.lineplot(x=t, y=data["clock_rmse"][:, 0], ax=ax_c_rmse[0], label="Bias")
-        sns.lineplot(x=t, y=data["clock_rmse"][:, 1], ax=ax_c_rmse[1], label="Drift")
-        ax_c_rmse[0].set(xlabel="Time [s]", ylabel="RMSE [m]")
-        ax_c_rmse[1].set(xlabel="Time [s]", ylabel="RMSE [m/s]")
-        ax_c_rmse[0].set_title(f"{scenario.replace('_', ' ').replace(' and ', '+').upper()} Clock RMSE", **bold_font)
-        ax_c_rmse[0].legend(loc="upper left")
-        ax_c_rmse[1].legend(loc="upper left")
-        f_c_rmse.tight_layout()
-        f_c_rmse.subplots_adjust(hspace=0.05)
+        # --------------------------------------------------------------------------------------------------------------
+        f_p_std, ax_p_std = plt.subplots(nrows=3, ncols=1, **{"figsize": (10, 12)})
+        f_v_std, ax_v_std = plt.subplots(nrows=3, ncols=1, **{"figsize": (10, 12)})
+        f_pall, ax_pall = plt.subplots(**{"figsize": (10, 5)})
+        f_vall, ax_vall = plt.subplots(**{"figsize": (10, 5)})
+        f_pall2, ax_pall2 = plt.subplots(**{"figsize": (10, 5)})
+        f_vall2, ax_vall2 = plt.subplots(**{"figsize": (10, 5)})
 
         # plot 3 sigma position standard deviation plots
-        f_p_std, ax_p_std = plt.subplots(nrows=3, ncols=1, **{"figsize": (10, 12)})
-        sns.lineplot(x=t, y=3 * data["position_filter_std"][:, 0], ax=ax_p_std[0], color="r", label="EKF")
-        sns.lineplot(x=t, y=-3 * data["position_filter_std"][:, 0], ax=ax_p_std[0], color="r", label="_nolegend_")
-        sns.lineplot(
-            x=t,
-            y=data["position_error_mean"][:, 0] + 3 * data["position_mc_std"][:, 0],
-            ax=ax_p_std[0],
-            color="b",
-            label="MC",
-        )
-        sns.lineplot(
-            x=t,
-            y=data["position_error_mean"][:, 0] - 3 * data["position_mc_std"][:, 0],
-            ax=ax_p_std[0],
-            color="b",
-            label="_nolegend_",
-        )
-        ax_p_std[0].legend(loc="upper center", ncols=2)
-        ax_p_std[0].set_title(
-            f"{scenario.replace('_', ' ').replace(' and ', '+').upper()} EKF vs. MC Position 3σ Estimates", **bold_font
-        )
+        for i, file in enumerate(os.listdir(RESULTS_PATH / scenario)):
+            if "run" not in file:
+                continue
+            run = dict(np.load(RESULTS_PATH / scenario / file))
+            sns.lineplot(
+                x=t, y=run["position_error"][:, 0], ax=ax_p_std[0], color="#a2e3b8", label="_nolegend_", alpha=0.6
+            )
+            sns.lineplot(
+                x=t, y=run["position_error"][:, 1], ax=ax_p_std[1], color="#a2e3b8", label="_nolegend_", alpha=0.6
+            )
+            sns.lineplot(
+                x=t, y=run["position_error"][:, 2], ax=ax_p_std[2], color="#a2e3b8", label="_nolegend_", alpha=0.6
+            )
+            sns.lineplot(
+                x=t, y=run["velocity_error"][:, 0], ax=ax_v_std[0], color="#a2e3b8", label="_nolegend_", alpha=0.6
+            )
+            sns.lineplot(
+                x=t, y=run["velocity_error"][:, 1], ax=ax_v_std[1], color="#a2e3b8", label="_nolegend_", alpha=0.6
+            )
+            sns.lineplot(
+                x=t, y=run["velocity_error"][:, 2], ax=ax_v_std[2], color="#a2e3b8", label="_nolegend_", alpha=0.6
+            )
+            sns.lineplot(
+                x=t, y=norm(run["position_error"], axis=1), ax=ax_pall, color="#a2e3b8", label="_nolegend_", alpha=0.6
+            )
+            sns.lineplot(
+                x=t, y=norm(run["velocity_error"], axis=1), ax=ax_vall, color="#a2e3b8", label="_nolegend_", alpha=0.6
+            )
+            sns.lineplot(
+                x=t, y=run["position_error"].mean(axis=1), ax=ax_pall2, color="#a2e3b8", label="_nolegend_", alpha=0.6
+            )
+            sns.lineplot(
+                x=t, y=run["velocity_error"].mean(axis=1), ax=ax_vall2, color="#a2e3b8", label="_nolegend_", alpha=0.6
+            )
+
+        d0 = data["position_error_mean"] + 3 * data["position_mc_std"]
+        d1 = data["position_error_mean"] - 3 * data["position_mc_std"]
+        sns.lineplot(x=t, y=3 * data["position_filter_std"][:, 0], ax=ax_p_std[0], color="#a52a2a", label="EKF")
+        sns.lineplot(x=t, y=-3 * data["position_filter_std"][:, 0], ax=ax_p_std[0], color="#a52a2a", label="_nolegend_")
+        sns.lineplot(x=t, y=d0[:, 0], ax=ax_p_std[0], color="#324ab2", label="MC")
+        sns.lineplot(x=t, y=d1[:, 0], ax=ax_p_std[0], color="#324ab2", label="_nolegend_")
+
+        sns.lineplot(x=t, y=3 * data["position_filter_std"][:, 1], ax=ax_p_std[1], color="#a52a2a")
+        sns.lineplot(x=t, y=-3 * data["position_filter_std"][:, 1], ax=ax_p_std[1], color="#a52a2a")
+        sns.lineplot(x=t, y=d0[:, 1], ax=ax_p_std[1], color="#324ab2")
+        sns.lineplot(x=t, y=d1[:, 1], ax=ax_p_std[1], color="#324ab2")
+
+        sns.lineplot(x=t, y=3 * data["position_filter_std"][:, 2], ax=ax_p_std[2], color="#a52a2a")
+        sns.lineplot(x=t, y=-3 * data["position_filter_std"][:, 2], ax=ax_p_std[2], color="#a52a2a")
+        sns.lineplot(x=t, y=d0[:, 2], ax=ax_p_std[2], color="#324ab2")
+        sns.lineplot(x=t, y=d1[:, 2], ax=ax_p_std[2], color="#324ab2")
+
+        m = norm(data["position_filter_std"], axis=1)
+        sns.lineplot(x=t, y=3 * m, ax=ax_pall, color="#a52a2a", label="EKF")
+        sns.lineplot(x=t, y=3 * norm(data["position_mc_std"], axis=1), ax=ax_pall, color="#324ab2", label="MC")
+
+        m = data["position_filter_std"].mean(axis=1)
+        sns.lineplot(x=t, y=3 * m, ax=ax_pall2, color="#a52a2a", label="EKF")
+        sns.lineplot(x=t, y=-3 * m, ax=ax_pall2, color="#a52a2a", label="_nolabel_")
+        sns.lineplot(x=t, y=d0.mean(axis=1), ax=ax_pall2, color="#324ab2", label="MC")
+        sns.lineplot(x=t, y=d1.mean(axis=1), ax=ax_pall2, color="#324ab2", label="_nolabel_")
+
+        ax_p_std[0].legend()
+        ax_p_std[0].set_title(f"{title} EKF vs. MC Position 3σ Estimates", **bold_font)
         ax_p_std[0].set_ylabel("East [m]")
-
-        sns.lineplot(x=t, y=3 * data["position_filter_std"][:, 1], ax=ax_p_std[1], color="r")
-        sns.lineplot(x=t, y=-3 * data["position_filter_std"][:, 1], ax=ax_p_std[1], color="r")
-        sns.lineplot(
-            x=t, y=data["position_error_mean"][:, 1] + 3 * data["position_mc_std"][:, 1], ax=ax_p_std[1], color="b"
-        )
-        sns.lineplot(
-            x=t, y=data["position_error_mean"][:, 1] - 3 * data["position_mc_std"][:, 1], ax=ax_p_std[1], color="b"
-        )
         ax_p_std[1].set_ylabel("North [m]")
-
-        sns.lineplot(x=t, y=3 * data["position_filter_std"][:, 2], ax=ax_p_std[2], color="r")
-        sns.lineplot(x=t, y=-3 * data["position_filter_std"][:, 2], ax=ax_p_std[2], color="r")
-        sns.lineplot(
-            x=t, y=data["position_error_mean"][:, 2] + 3 * data["position_mc_std"][:, 2], ax=ax_p_std[2], color="b"
-        )
-        sns.lineplot(
-            x=t, y=data["position_error_mean"][:, 2] - 3 * data["position_mc_std"][:, 2], ax=ax_p_std[2], color="b"
-        )
         ax_p_std[2].set(xlabel="Time [s]", ylabel="Up [m]")
-
         f_p_std.tight_layout()
         f_p_std.subplots_adjust(hspace=0.05)
 
+        ax_pall.legend()
+        ax_pall.set_title(f"{title} EKF vs. MC Position Norm 3σ Estimates", **bold_font)
+        ax_pall.set(xlabel="Time [s]", ylabel="Error [m]")
+        f_pall.tight_layout()
+        f_pall.subplots_adjust(hspace=0.05)
+
+        ax_pall2.legend()
+        ax_pall2.set_title(f"{title} EKF vs. MC Position Mean 3σ Estimates", **bold_font)
+        ax_pall2.set(xlabel="Time [s]", ylabel="Error [m]")
+        f_pall2.tight_layout()
+        f_pall2.subplots_adjust(hspace=0.05)
+
         # plot 3 sigma velocity standard deviation plots
-        f_v_std, ax_v_std = plt.subplots(nrows=3, ncols=1, **{"figsize": (10, 12)})
-        sns.lineplot(x=t, y=3 * data["velocity_filter_std"][:, 0], ax=ax_v_std[0], color="r", label="EKF")
-        sns.lineplot(x=t, y=-3 * data["velocity_filter_std"][:, 0], ax=ax_v_std[0], color="r", label="_nolegend_")
-        sns.lineplot(x=t, y=3 * data["velocity_mc_std"][:, 0], ax=ax_v_std[0], color="b", label="MC")
-        sns.lineplot(x=t, y=-3 * data["velocity_mc_std"][:, 0], ax=ax_v_std[0], color="b", label="_nolegend_")
-        ax_v_std[0].legend(loc="upper center", ncols=2)
-        ax_v_std[0].set_title(
-            f"{scenario.replace('_', ' ').replace(' and ', '+').upper()} EKF vs. MC Velocity 3σ Estimates", **bold_font
-        )
-        ax_v_std[0].set_ylabel("East [m/s]")
+        d0 = data["velocity_error_mean"] + 3 * data["velocity_mc_std"]
+        d1 = data["velocity_error_mean"] - 3 * data["velocity_mc_std"]
+        sns.lineplot(x=t, y=3 * data["velocity_filter_std"][:, 0], ax=ax_v_std[0], color="#a52a2a", label="EKF")
+        sns.lineplot(x=t, y=-3 * data["velocity_filter_std"][:, 0], ax=ax_v_std[0], color="#a52a2a", label="_nolegend_")
+        sns.lineplot(x=t, y=d0[:, 0], ax=ax_v_std[0], color="#324ab2", label="MC")
+        sns.lineplot(x=t, y=d1[:, 0], ax=ax_v_std[0], color="#324ab2", label="_nolegend_")
 
-        sns.lineplot(x=t, y=3 * data["velocity_filter_std"][:, 1], ax=ax_v_std[1], color="r")
-        sns.lineplot(x=t, y=-3 * data["velocity_filter_std"][:, 1], ax=ax_v_std[1], color="r")
-        sns.lineplot(x=t, y=3 * data["velocity_mc_std"][:, 1], ax=ax_v_std[1], color="b")
-        sns.lineplot(x=t, y=-3 * data["velocity_mc_std"][:, 1], ax=ax_v_std[1], color="b")
-        ax_v_std[1].set_ylabel("North [m/s]")
+        sns.lineplot(x=t, y=3 * data["velocity_filter_std"][:, 1], ax=ax_v_std[1], color="#a52a2a")
+        sns.lineplot(x=t, y=-3 * data["velocity_filter_std"][:, 1], ax=ax_v_std[1], color="#a52a2a")
+        sns.lineplot(x=t, y=d0[:, 1], ax=ax_v_std[1], color="#324ab2")
+        sns.lineplot(x=t, y=d1[:, 1], ax=ax_v_std[1], color="#324ab2")
 
-        sns.lineplot(x=t, y=3 * data["velocity_filter_std"][:, 2], ax=ax_v_std[2], color="r")
-        sns.lineplot(x=t, y=-3 * data["velocity_filter_std"][:, 2], ax=ax_v_std[2], color="r")
-        sns.lineplot(x=t, y=3 * data["velocity_mc_std"][:, 2], ax=ax_v_std[2], color="b")
-        sns.lineplot(x=t, y=-3 * data["velocity_mc_std"][:, 2], ax=ax_v_std[2], color="b")
-        ax_v_std[2].set(xlabel="Time [s]", ylabel="Up [m/s]")
+        sns.lineplot(x=t, y=3 * data["velocity_filter_std"][:, 2], ax=ax_v_std[2], color="#a52a2a")
+        sns.lineplot(x=t, y=-3 * data["velocity_filter_std"][:, 2], ax=ax_v_std[2], color="#a52a2a")
+        sns.lineplot(x=t, y=d0[:, 2], ax=ax_v_std[2], color="#324ab2")
+        sns.lineplot(x=t, y=d1[:, 2], ax=ax_v_std[2], color="#324ab2")
 
+        m = norm(data["velocity_filter_std"], axis=1)
+        sns.lineplot(x=t, y=3 * m, ax=ax_vall, color="#a52a2a", label="EKF")
+        sns.lineplot(x=t, y=3 * norm(data["velocity_mc_std"], axis=1), ax=ax_vall, color="#324ab2", label="MC")
+
+        m = data["velocity_filter_std"].mean(axis=1)
+        sns.lineplot(x=t, y=3 * m, ax=ax_vall2, color="#a52a2a", label="EKF")
+        sns.lineplot(x=t, y=-3 * m, ax=ax_vall2, color="#a52a2a", label="_nolabel_")
+        sns.lineplot(x=t, y=d0.mean(axis=1), ax=ax_vall2, color="#324ab2", label="MC")
+        sns.lineplot(x=t, y=d1.mean(axis=1), ax=ax_vall2, color="#324ab2", label="_nolabel_")
+
+        ax_v_std[0].legend()
+        ax_v_std[0].set_title(f"{title} EKF vs. MC Velocity 3σ Estimates", **bold_font)
+        ax_v_std[0].set_ylabel("East [m/2]")
+        ax_v_std[1].set_ylabel("North [m/2]")
+        ax_v_std[2].set(xlabel="Time [s]", ylabel="Up [m/2]")
         f_v_std.tight_layout()
         f_v_std.subplots_adjust(hspace=0.05)
 
-        # plot 3 sigma attitude standard deviation plots
-        f_a_std, ax_a_std = plt.subplots(nrows=3, ncols=1, **{"figsize": (10, 12)})
-        sns.lineplot(x=t, y=3 * data["attitude_filter_std"][:, 0], ax=ax_a_std[0], color="r", label="EKF")
-        sns.lineplot(x=t, y=-3 * data["attitude_filter_std"][:, 0], ax=ax_a_std[0], color="r", label="_nolegend_")
-        sns.lineplot(x=t, y=3 * data["attitude_mc_std"][:, 0], ax=ax_a_std[0], color="b", label="MC")
-        sns.lineplot(x=t, y=-3 * data["attitude_mc_std"][:, 0], ax=ax_a_std[0], color="b", label="_nolegend_")
-        ax_a_std[0].legend(loc="upper center", ncols=2)
-        ax_a_std[0].set_title(
-            f"{scenario.replace('_', ' ').replace(' and ', '+').upper()} EKF vs. MC Attitude 3σ Estimates", **bold_font
-        )
-        ax_a_std[0].set_ylabel("Roll [°]")
+        ax_vall.legend()
+        ax_vall.set_title(f"{title} EKF vs. MC Velocity Norm 3σ Estimates", **bold_font)
+        ax_vall.set(xlabel="Time [s]", ylabel="Error [m/s]")
+        f_vall.tight_layout()
+        f_vall.subplots_adjust(hspace=0.05)
 
-        sns.lineplot(x=t, y=3 * data["attitude_filter_std"][:, 1], ax=ax_a_std[1], color="r")
-        sns.lineplot(x=t, y=-3 * data["attitude_filter_std"][:, 1], ax=ax_a_std[1], color="r")
-        sns.lineplot(x=t, y=3 * data["attitude_mc_std"][:, 1], ax=ax_a_std[1], color="b")
-        sns.lineplot(x=t, y=-3 * data["attitude_mc_std"][:, 1], ax=ax_a_std[1], color="b")
-        ax_a_std[1].set_ylabel("Pitch [°]")
+        ax_vall2.legend()
+        ax_vall2.set_title(f"{title} EKF vs. MC Velocity Mean 3σ Estimates", **bold_font)
+        ax_vall2.set(xlabel="Time [s]", ylabel="Error [m/s]")
+        f_vall2.tight_layout()
+        f_vall2.subplots_adjust(hspace=0.05)
 
-        sns.lineplot(x=t, y=3 * data["attitude_filter_std"][:, 2], ax=ax_a_std[2], color="r")
-        sns.lineplot(x=t, y=-3 * data["attitude_filter_std"][:, 2], ax=ax_a_std[2], color="r")
-        sns.lineplot(x=t, y=3 * data["attitude_mc_std"][:, 2], ax=ax_a_std[2], color="b")
-        sns.lineplot(x=t, y=-3 * data["attitude_mc_std"][:, 2], ax=ax_a_std[2], color="b")
-        ax_a_std[2].set(xlabel="Time [s]", ylabel="Yaw [°]")
-
-        f_a_std.tight_layout()
-        f_a_std.subplots_adjust(hspace=0.05)
-
-        # plot 3 sigma clock standard deviation plots
-        f_c_std, ax_c_std = plt.subplots(nrows=2, ncols=1, **{"figsize": (10, 7)})
-        sns.lineplot(x=t, y=3 * data["clock_filter_std"][:, 0], ax=ax_c_std[0], color="r", label="EKF")
-        sns.lineplot(x=t, y=-3 * data["clock_filter_std"][:, 0], ax=ax_c_std[0], color="r", label="_nolegend_")
-        sns.lineplot(x=t, y=3 * data["clock_mc_std"][:, 0], ax=ax_c_std[0], color="b", label="MC")
-        sns.lineplot(x=t, y=-3 * data["clock_mc_std"][:, 0], ax=ax_c_std[0], color="b", label="_nolegend_")
-        ax_c_std[0].legend(loc="upper center", ncols=2)
-        ax_c_std[0].set_title(
-            f"{scenario.replace('_', ' ').replace(' and ', '+').upper()} EKF vs. MC Clock 3σ Estimates", **bold_font
-        )
-        ax_c_std[0].set_ylabel("Bias [m]")
-
-        sns.lineplot(x=t, y=3 * data["clock_filter_std"][:, 1], ax=ax_c_std[1], color="r")
-        sns.lineplot(x=t, y=-3 * data["clock_filter_std"][:, 1], ax=ax_c_std[1], color="r")
-        sns.lineplot(x=t, y=3 * data["clock_mc_std"][:, 1], ax=ax_c_std[1], color="b")
-        sns.lineplot(x=t, y=-3 * data["clock_mc_std"][:, 1], ax=ax_c_std[1], color="b")
-        ax_c_std[1].set_ylabel("Drift [m/s]")
-
-        f_c_std.tight_layout()
-        f_c_std.subplots_adjust(hspace=0.05)
-
+        # --------------------------------------------------------------------------------------------------------------
         # plot gdop/vdop/hdop and number of emitters
         f_dop, ax_dop = plt.subplots(nrows=2, ncols=1, **{"figsize": (10, 8)})
         d = data["dop"]
         sns.lineplot(x=t, y=d[:, 0], ax=ax_dop[0], label="GDOP", marker="s", markevery=100, markersize=8)
         sns.lineplot(x=t, y=d[:, 2], ax=ax_dop[0], label="HDOP", marker="o", markevery=100)
         sns.lineplot(x=t, y=d[:, 3], ax=ax_dop[0], label="VDOP", marker=">", markevery=100)
-        sns.lineplot(x=t, y=data["dop"][:, 5], ax=ax_dop[1], linestyle="--")
+        sns.lineplot(x=t, y=np.round(data["dop"][:, 5]), ax=ax_dop[1], linestyle="--")
         ax_dop[0].set_ylabel("Magnitude")
-        ax_dop[0].set_title(
-            f"{scenario.replace('_', ' ').replace(' and ', '+').upper()} Dilution of Precision", **bold_font
-        )
-        ax_dop[0].legend(loc="upper left")
+        ax_dop[0].set_title(f"{title} Dilution of Precision", **bold_font)
+        ax_dop[0].legend()
+        ax_dop[0].yaxis.set_major_locator(MaxNLocator(integer=True))
         ax_dop[1].set(xlabel="Time [s]", ylabel="Amount of Visible Emitters")
-        # ax_dop[1].legend(loc="upper left")
-
+        ax_dop[1].yaxis.set_major_locator(MaxNLocator(integer=True))
         f_dop.tight_layout()
         f_dop.subplots_adjust(hspace=0.05)
 
+        # --------------------------------------------------------------------------------------------------------------
         # plot 3 sigma position standard deviation plots
         f_std, ax_std = plt.subplots(**{"figsize": (10, 5)})
         filt_norm = norm(data["position_filter_std"], axis=1)
         mc_norm = norm(data["position_mc_std"], axis=1)
         sns.lineplot(x=t, y=filt_norm, ax=ax_std, label="EKF")
         sns.lineplot(x=t, y=mc_norm, ax=ax_std, label="MC")
-        # ax_std.legend(loc="upper center", ncols=2)
-        ax_std.set_title(
-            f"{scenario.replace('_', ' ').replace(' and ', '+').upper()} EKF vs. MC Position Standard Deviation",
-            **bold_font,
-        )
+        ax_std.set_title(f"{title} EKF vs. MC Position Standard Deviation", **bold_font)
         ax_std.set(xlabel="Time [s]", ylabel="σ [m]")
 
         f_std.tight_layout()
@@ -272,22 +262,14 @@ def plot_individual(show: bool = False, save: bool = True):
 
         # plot position mean and standard deviation plots
         f_blake, ax_blake = plt.subplots(nrows=2, ncols=1, **{"figsize": (10, 8)})
-        # filt_std_norm = norm(data["position_filter_std"], axis=1)
-        # filt_mean_norm = np.zeros(filt_std_norm.size)
-        # mc_std_norm = norm(data["position_mc_std"], axis=1)
-        # mc_mean_norm = norm(data["position_error_mean"], axis=1)
-        sns.lineplot(x=t, y=data["position_error_mean"][:, 0], ax=ax_blake[0], label="EKF std")
-        sns.lineplot(x=t, y=data["position_error_mean"][:, 1], ax=ax_blake[0], label="_nolegend_")
-        sns.lineplot(x=t, y=data["position_error_mean"][:, 2], ax=ax_blake[0], label="EKF mean")
+        sns.lineplot(x=t, y=data["position_error_mean"][:, 0], ax=ax_blake[0], label="E")
+        sns.lineplot(x=t, y=data["position_error_mean"][:, 1], ax=ax_blake[0], label="N")
+        sns.lineplot(x=t, y=data["position_error_mean"][:, 2], ax=ax_blake[0], label="U")
         sns.lineplot(x=t, y=data["velocity_error_mean"][:, 0], ax=ax_blake[1], label="E")
         sns.lineplot(x=t, y=data["velocity_error_mean"][:, 1], ax=ax_blake[1], label="N")
         sns.lineplot(x=t, y=data["velocity_error_mean"][:, 2], ax=ax_blake[1], label="U")
-        ax_blake[0].set_title(
-            f"{scenario.replace('_', ' ').replace(' and ', '+').upper()} MC error mean",
-            **bold_font,
-        )
+        ax_blake[0].set_title(f"{title} MC error mean", **bold_font)
         ax_blake[0].legend()
-        ax_blake[1].legend()
         ax_blake[0].set(ylabel="Position [m]")
         ax_blake[1].set(xlabel="Time [s]", ylabel="Velocity [m/s]")
 
@@ -298,34 +280,33 @@ def plot_individual(show: bool = False, save: bool = True):
         if show:
             move_figure(f_p_rmse, 350, 850)
             move_figure(f_v_rmse, 400, 900)
-            move_figure(f_a_rmse, 450, 950)
-            move_figure(f_c_rmse, 500, 1000)
             move_figure(f_p_std, 350, 850)
             move_figure(f_v_std, 400, 900)
-            move_figure(f_a_std, 450, 950)
-            move_figure(f_c_std, 500, 1000)
             move_figure(f_dop, 300, 800)
+            move_figure(f_blake, 300, 800)
             plt.show()
 
         # save plots if desired
         if save:
-            f_p_rmse.savefig(FIGURES_PATH / f"{scenario}_rmse_position.jpeg")
-            f_v_rmse.savefig(FIGURES_PATH / f"{scenario}_rmse_velocity.jpeg")
-            f_a_rmse.savefig(FIGURES_PATH / f"{scenario}_rmse_attitude.jpeg")
-            f_c_rmse.savefig(FIGURES_PATH / f"{scenario}_rmse_clock.jpeg")
-            f_p_std.savefig(FIGURES_PATH / f"{scenario}_3_sigma_position.jpeg")
-            f_v_std.savefig(FIGURES_PATH / f"{scenario}_3_sigma_velocity.jpeg")
-            f_a_std.savefig(FIGURES_PATH / f"{scenario}_3_sigma_attitude.jpeg")
-            f_c_std.savefig(FIGURES_PATH / f"{scenario}_3_sigma_clock.jpeg")
-            f_dop.savefig(FIGURES_PATH / f"{scenario}_dop.jpeg")
-            f_std.savefig(FIGURES_PATH / f"{scenario}_standard_deviation.jpeg")
-            f_blake.savefig(FIGURES_PATH / f"{scenario}_blake.jpeg")
+            nt.io.ensure_exist(FIGURES_PATH / f"{scenario}")
+            f_p_rmse.savefig(FIGURES_PATH / f"{scenario}" / f"{scenario}_rmse_position.jpeg")
+            f_v_rmse.savefig(FIGURES_PATH / f"{scenario}" / f"{scenario}_rmse_velocity.jpeg")
+            f_p_std.savefig(FIGURES_PATH / f"{scenario}" / f"{scenario}_3_sigma_position.jpeg")
+            f_v_std.savefig(FIGURES_PATH / f"{scenario}" / f"{scenario}_3_sigma_velocity.jpeg")
+            f_dop.savefig(FIGURES_PATH / f"{scenario}" / f"{scenario}_dop.jpeg")
+            f_std.savefig(FIGURES_PATH / f"{scenario}" / f"{scenario}_standard_deviation.jpeg")
+            f_blake.savefig(FIGURES_PATH / f"{scenario}" / f"{scenario}_blake.jpeg")
+            f_pall.savefig(FIGURES_PATH / f"{scenario}" / f"{scenario}_3_sigma_position_norm.jpeg")
+            f_pall2.savefig(FIGURES_PATH / f"{scenario}" / f"{scenario}_3_sigma_position_mean.jpeg")
+            f_vall.savefig(FIGURES_PATH / f"{scenario}" / f"{scenario}_3_sigma_velocity_norm.jpeg")
+            f_vall2.savefig(FIGURES_PATH / f"{scenario}" / f"{scenario}_3_sigma_velocity_mean.jpeg")
 
             pp = PdfPages(FIGURES_PATH / f"_{scenario}_individual.pdf")
             pp.savefig(f_p_rmse)
             pp.savefig(f_dop)
             pp.savefig(f_v_rmse)
-            pp.savefig(f_std)
+            pp.savefig(f_pall2)
+            pp.savefig(f_vall2)
             pp.close()
 
         plt.close("all")
@@ -336,7 +317,7 @@ def plot_comparison(show: bool = False, save: bool = True):
     f_v, ax_v = plt.subplots(**{"figsize": (10, 5)})
     f_p_imu, ax_p_imu = plt.subplots(**{"figsize": (10, 5)})
     f_v_imu, ax_v_imu = plt.subplots(**{"figsize": (10, 5)})
-    f_dop, ax_dop = plt.subplots(nrows=2, ncols=1, **{"figsize": (10, 8)})
+    f_dop, ax_dop = plt.subplots(nrows=4, ncols=1, **{"figsize": (10, 12)})
 
     mkrs = ["s", "o", ">", ""]
     mkr_size = [8, 10, 10, 10]
@@ -345,108 +326,64 @@ def plot_comparison(show: bool = False, save: bool = True):
         # retrieve data from 'npz' file
         data = load_data(RESULTS_PATH / scenario)
         t = data["time"]
+        title = scenario.replace("_", " ").replace(" and ", "+").upper()
 
-        # plot position rmse norm
-        d = norm(data["position_rmse"], axis=1)
-        sns.lineplot(
-            x=t,
-            y=d,
-            ax=ax_p_imu,
-            label=f"{scenario.replace('_', ' ').replace(' and ', '+').upper()}",
-            marker=mkr,
-            linestyle=ls,
-            markersize=mkrs,
-            markevery=100,
-        )
+        # plot rmse norm
+        d = data["dop"]
+        d0 = norm(data["position_rmse"], axis=1)
+        d1 = norm(data["velocity_rmse"], axis=1)
+        sns.lineplot(x=t, y=d0, ax=ax_p_imu, label=f"{title}", marker=mkr, linestyle=ls, markersize=mkrs, markevery=100)
+        sns.lineplot(x=t, y=d1, ax=ax_v_imu, label=f"{title}", marker=mkr, linestyle=ls, markersize=mkrs, markevery=100)
         if scenario.casefold() != "imu":
+            sns.lineplot(x=t, y=d0, ax=ax_p, label=f"{title}", marker=mkr, linestyle=ls, markersize=mkrs, markevery=100)
+            sns.lineplot(x=t, y=d1, ax=ax_v, label=f"{title}", marker=mkr, linestyle=ls, markersize=mkrs, markevery=100)
             sns.lineplot(
-                x=t,
-                y=d,
-                ax=ax_p,
-                label=f"{scenario.replace('_', ' ').replace(' and ', '+').upper()}",
-                marker=mkr,
-                linestyle=ls,
-                markersize=mkrs,
-                markevery=100,
+                x=t, y=d[:, 0], ax=ax_dop[0], label=f"{title}", marker=mkr, linestyle=ls, markersize=mkrs, markevery=100
+            )
+            sns.lineplot(x=t, y=d[:, 2], ax=ax_dop[1], marker=mkr, linestyle=ls, markersize=mkrs, markevery=100)
+            sns.lineplot(x=t, y=d[:, 3], ax=ax_dop[2], marker=mkr, linestyle=ls, markersize=mkrs, markevery=100)
+            sns.lineplot(
+                x=t, y=np.round(d[:, 5]), ax=ax_dop[3], marker=mkr, linestyle=ls, markersize=mkrs, markevery=100
             )
 
-        # plot velocity rmse norm
-        d = norm(data["velocity_rmse"], axis=1)
-        sns.lineplot(
-            x=t,
-            y=d,
-            ax=ax_v_imu,
-            label=f"{scenario.replace('_', ' ').replace(' and ', '+').upper()}",
-            marker=mkr,
-            linestyle=ls,
-            markersize=mkrs,
-            markevery=100,
-        )
-        if scenario.casefold() != "imu":
-            sns.lineplot(
-                x=t,
-                y=d,
-                ax=ax_v,
-                label=f"{scenario.replace('_', ' ').replace(' and ', '+').upper()}",
-                marker=mkr,
-                linestyle=ls,
-                markersize=mkrs,
-                markevery=100,
-            )
-
-        # plot GDOP
-        if scenario.casefold() != "imu":
-            d = data["dop"]
-            sns.lineplot(
-                x=t,
-                y=d[:, 0],
-                ax=ax_dop[0],
-                label=f"{scenario.replace('_', ' ').replace(' and ', '+').upper()}",
-                marker=mkr,
-                linestyle=ls,
-                markersize=mkrs,
-                markevery=100,
-            )
-            sns.lineplot(
-                x=t,
-                y=d[:, 5],
-                ax=ax_dop[1],
-                # label=f"{scenario.replace('_', ' ').title()}",
-                marker=mkr,
-                linestyle=ls,
-                markersize=mkrs,
-                markevery=100,
-            )
-
-    ax_p.set(xlabel="Time [s]", ylabel="RMSE [m]")
+    ax_p.set(xlabel="Time [s]", ylabel="RMSE [m]", yscale="log")
     ax_p.set_title(f"Position RMSE", **bold_font)
-    ax_p.legend(loc="upper left")
+    ax_p.legend()
     f_p.tight_layout()
     f_p.subplots_adjust(hspace=0.05)
 
-    ax_p_imu.set(xlabel="Time [s]", ylabel="RMSE [m]")
+    ax_p_imu.set(xlabel="Time [s]", ylabel="RMSE [m]", yscale="log")
     ax_p_imu.set_title(f"Position RMSE including IMU", **bold_font)
-    ax_p_imu.legend(loc="upper left")
+    ax_p_imu.legend()
     f_p_imu.tight_layout()
     f_p_imu.subplots_adjust(hspace=0.05)
 
-    ax_v.set(xlabel="Time [s]", ylabel="RMSE [m/s]")
+    ax_v.set(xlabel="Time [s]", ylabel="RMSE [m/s]", yscale="log")
     ax_v.set_title(f"Velocity RMSE", **bold_font)
-    ax_v.legend(loc="upper left")
+    ax_v.legend()
     f_v.tight_layout()
     f_v.subplots_adjust(hspace=0.05)
 
-    ax_v_imu.set(xlabel="Time [s]", ylabel="RMSE [m/s]")
+    ax_v_imu.set(xlabel="Time [s]", ylabel="RMSE [m/s]", yscale="log")
     ax_v_imu.set_title(f"Velocity RMSE including IMU", **bold_font)
-    ax_v_imu.legend(loc="upper left")
+    ax_v_imu.legend()
+    ax_v_imu.set_yscale("log")
     f_v_imu.tight_layout()
     f_v_imu.subplots_adjust(hspace=0.05)
 
-    ax_dop[0].set(ylabel="Magnitude", ylim=[0, 17])
-    ax_dop[0].set_title(f"Geometric Dilution of Precision", **bold_font)
-    ax_dop[0].legend(loc="upper left")
-    ax_dop[1].set(xlabel="Time [s]", ylabel="Amount of Visible Emitters")
-    # ax_dop[1].legend(loc="upper left")
+    ax_dop[0].set(ylabel="GDOP", ylim=[0, 22])
+    ax_dop[0].set_title(f"Dilution of Precision", **bold_font)
+    ax_dop[0].legend()
+    ax_dop[0].yaxis.set_major_locator(MaxNLocator(integer=True))
+    ax_dop[1].set(ylabel="HDOP", ylim=[0, 5])
+    ax_dop[1].yaxis.set_major_locator(MaxNLocator(integer=True))
+    # ax_dop[1].legend().set_visible(False)
+    ax_dop[2].set(ylabel="VDOP", ylim=[0, 22])
+    ax_dop[2].yaxis.set_major_locator(MaxNLocator(integer=True))
+    # ax_dop[2].legend().set_visible(False)
+    ax_dop[3].set(xlabel="Time [s]", ylabel="Amount of Visible Emitters")
+    ax_dop[3].yaxis.set_major_locator(MaxNLocator(integer=True))
+    # ax_dop[3].legend().set_visible(False)
     f_dop.tight_layout()
     f_dop.subplots_adjust(hspace=0.05)
 
@@ -461,11 +398,12 @@ def plot_comparison(show: bool = False, save: bool = True):
 
     # save plots if desired
     if save:
-        f_p_imu.savefig(FIGURES_PATH / f"comparison_rmse_position.jpeg")
-        f_v_imu.savefig(FIGURES_PATH / f"comparison_rmse_velocity.jpeg")
-        f_p.savefig(FIGURES_PATH / f"comparison_rmse_position_no_imu.jpeg")
-        f_v.savefig(FIGURES_PATH / f"comparison_rmse_velocity_no_imu.jpeg")
-        f_dop.savefig(FIGURES_PATH / f"comparison_dop.jpeg")
+        nt.io.ensure_exist(FIGURES_PATH / f"comparisons")
+        f_p_imu.savefig(FIGURES_PATH / "comparisons" / f"comparison_rmse_position.jpeg")
+        f_v_imu.savefig(FIGURES_PATH / "comparisons" / f"comparison_rmse_velocity.jpeg")
+        f_p.savefig(FIGURES_PATH / "comparisons" / f"comparison_rmse_position_no_imu.jpeg")
+        f_v.savefig(FIGURES_PATH / "comparisons" / f"comparison_rmse_velocity_no_imu.jpeg")
+        f_dop.savefig(FIGURES_PATH / "comparisons" / f"comparison_dop.jpeg")
 
         pp = PdfPages(FIGURES_PATH / f"_comparison.pdf")
         pp.savefig(f_p)
@@ -484,13 +422,14 @@ def plot_trajectory(show: bool = False, save: bool = True):
 
     # create artificial config
     config = ns.SimulationConfiguration(
-        time=ns.TimeConfiguration(1000, 0.1, 2024, 1, 1, 0, 0, 0),
+        time=ns.TimeConfiguration(200, 0.1, 2024, 1, 1, 12, 1, 0),
         constellations=ns.ConstellationsConfiguration(
-            {
+            mask_angle=7.5,
+            emitters={
                 "iridium-next": ns.SignalConfiguration(signal="iridium"),
                 # "orbcomm": ns.SignalConfiguration(signal="orbcomm"),
                 "buoy": ns.SignalConfiguration(signal="buoy"),
-            }
+            },
         ),
         errors=ns.ErrorConfiguration(),
         imu=ns.IMUConfiguration(model="perfect"),
@@ -505,10 +444,11 @@ def plot_trajectory(show: bool = False, save: bool = True):
 
     f_update = int(100 * 10)
     meas_sim = ns.simulations.MeasurementSimulation(config, False)
-    meas_sim.generate_truth(ins_sim.ecef_position[::f_update, :], ins_sim.ecef_velocity[::f_update, :])
+    meas_sim.generate_truth(ins_sim.ecef_position[0, :], ins_sim.ecef_velocity[0, :])
     meas_sim.simulate()
 
     # rotate emitters into enu frame
+    print(ins_sim.geodetic_position[0, :])
     C_e_n = nt.ecef2enuDcm(ins_sim.geodetic_position[0, :] * np.array([np.pi / 180, np.pi / 180, 1.0]))
     ecef0 = ins_sim.ecef_position[0, :]
     e_keys = []
@@ -526,10 +466,10 @@ def plot_trajectory(show: bool = False, save: bool = True):
 
     # plot trajectory only
     f_traj, ax_traj = plt.subplots(**{"figsize": (10, 8)})
-    sns.lineplot(
-        x=ins_sim.tangent_position[::100, 0],
-        y=ins_sim.tangent_position[::100, 1],
-        ax=ax_traj,
+    ax_traj.plot(
+        ins_sim.tangent_position[::100, 0],
+        ins_sim.tangent_position[::100, 1],
+        # ax=ax_traj,
         label="Trajectory",
         # marker="$\u1F6EA$",
         marker="$\u2708$",
@@ -621,8 +561,8 @@ def plot_trajectory(show: bool = False, save: bool = True):
         color="#b47249",
     )
 
-    ax_traj.set(xlabel="East [m]", ylabel="North [m]")
-    ax2.set(xlabel="East [m]", ylabel="North [m]")
+    ax_traj.set(xlabel="East [m]", ylabel="North [m]", aspect="equal")
+    ax2.set(xlabel="East [m]", ylabel="North [m]", aspect="equal")
     ax2.legend()
     f_traj.tight_layout()
     f_traj.subplots_adjust(hspace=0.05)
@@ -637,8 +577,9 @@ def plot_trajectory(show: bool = False, save: bool = True):
 
     # save plots if desired
     if save:
-        f_traj.savefig(FIGURES_PATH / f"trajectory.jpeg")
-        f2.savefig(FIGURES_PATH / f"trajectory_with_emitters.jpeg")
+        nt.io.ensure_exist(FIGURES_PATH / f"trajectory")
+        f_traj.savefig(FIGURES_PATH / "trajectory" / f"trajectory.jpeg")
+        f2.savefig(FIGURES_PATH / "trajectory" / f"trajectory_with_emitters.jpeg")
 
         pp = PdfPages(FIGURES_PATH / f"_trajectory.pdf")
         pp.savefig(f_traj)
@@ -657,11 +598,11 @@ if __name__ == "__main__":
     )
     # Set1, Dark2, copper
 
-    print("[charlizard] plotting individual results ")
-    plot_individual(show=True, save=False)
+    # print("[charlizard] plotting individual results ")
+    # plot_individual(show=False, save=True)
 
-    # print("[charlizard] plotting comparison of results ")
-    # plot_comparison(show=False, save=True)
+    print("[charlizard] plotting comparison of results ")
+    plot_comparison(show=False, save=True)
 
     # print("[charlizard] plotting 2d trajectory ")
     # plot_trajectory(show=False, save=True)

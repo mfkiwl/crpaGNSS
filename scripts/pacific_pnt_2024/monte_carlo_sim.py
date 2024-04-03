@@ -34,12 +34,12 @@ except:
 
 NAVIGATOR = "soop_ins"
 DISABLE_PROGRESS = True
-N_RUNS = 10
+N_RUNS = 100
 
 PROJECT_PATH = Path(__file__).parents[2]
 RESULTS_PATH = PROJECT_PATH / "results" / "pacific_pnt"
-SCENARIOS = ["imu"]
-# SCENARIOS = ["leo", "buoy", "leo_and_buoy", "imu"]
+# SCENARIOS = ["leo_and_buoy"]
+SCENARIOS = ["leo", "buoy", "leo_and_buoy", "imu"]
 
 
 # * map scenario to actual emitters used
@@ -127,7 +127,7 @@ def monte_carlo():
         else:
             prompt_string = f"[charlizard] Monte Carlo for {scenario.upper()} "
 
-        # # TODO: figure out why picking 'Satrec' object does not work
+        # # TODO: figure out why pickling 'Satrec' object does not work
         # with pool.Pool(processes=cpu_count()) as p:
         #     args = [
         #         (config, meas_sim, ins_sim, is_signal_available, DISABLE_PROGRESS, i)
@@ -194,100 +194,44 @@ def process_mc_results(time: np.ndarray):
             # initialize monte carlo results
             if i == 0:
                 n = time.size
-                results = {
-                    "time": time,
-                    "position_mean": np.zeros((n, 3)),
-                    "velocity_mean": np.zeros((n, 3)),
-                    "attitude_mean": np.zeros((n, 3)),
-                    "clock_mean": np.zeros((n, 2)),
-                    "position_error_mean": np.zeros((n, 3)),
-                    "velocity_error_mean": np.zeros((n, 3)),
-                    "attitude_error_mean": np.zeros((n, 3)),
-                    "clock_error_mean": np.zeros((n, 2)),
-                    "position_rmse": np.zeros((n, 3)),
-                    "velocity_rmse": np.zeros((n, 3)),
-                    "attitude_rmse": np.zeros((n, 3)),
-                    "clock_rmse": np.zeros((n, 2)),
-                    "position_filter_std": np.zeros((n, 3)),
-                    "velocity_filter_std": np.zeros((n, 3)),
-                    "attitude_filter_std": np.zeros((n, 3)),
-                    "clock_filter_std": np.zeros((n, 2)),
-                    "position_mc_std": np.zeros((n, 3)),
-                    "velocity_mc_std": np.zeros((n, 3)),
-                    "attitude_mc_std": np.zeros((n, 3)),
-                    "clock_mc_std": np.zeros((n, 2)),
-                    "dop": np.zeros((n, 6)),
-                }
+                res_pos = data["position"][:n, :]
+                res_vel = data["velocity"][:n, :]
+                res_pos_err = data["position_error"][:n, :]
+                res_vel_err = data["velocity_error"][:n, :]
+                res_pos_std_filt = data["position_std_filter"][:n, :]
+                res_vel_std_filt = data["velocity_std_filter"][:n, :]
+                res_dop = np.zeros((n, 6))
 
-            # add state to mean absolute difference (mae)
-            results["position_mean"] += data["position"][:n, :]
-            results["velocity_mean"] += data["velocity"][:n, :]
-            results["attitude_mean"] += data["attitude"][:n, :]
-            results["clock_mean"] += data["clock"][:n, :]
+            else:
+                # add state to mean absolute difference (mae)
+                res_pos = np.dstack((res_pos, data["position"][:n, :]))
+                res_vel = np.dstack((res_vel, data["velocity"][:n, :]))
 
-            # attitude error need to be restricted to specific range
-            data["attitude_error"][data["attitude_error"] > 360] -= 360
-            data["attitude_error"][data["attitude_error"] < -360] += 360
+                # add error state to mean absolute difference (mae)
+                res_pos_err = np.dstack((res_pos_err, data["position_error"][:n, :]))
+                res_vel_err = np.dstack((res_vel_err, data["velocity_error"][:n, :]))
 
-            # add error state to mean absolute difference (mae)
-            results["position_error_mean"] += data["position_error"][:n, :]
-            results["velocity_error_mean"] += data["velocity_error"][:n, :]
-            results["attitude_error_mean"] += data["attitude_error"][:n, :]
-            results["clock_error_mean"] += data["clock_error"][:n, :]
+                # add filter standard deviations to mean absolute difference (mae)
+                res_pos_std_filt = np.dstack((res_pos_std_filt, data["position_std_filter"][:n, :]))
+                res_vel_std_filt = np.dstack((res_vel_std_filt, data["velocity_std_filter"][:n, :]))
 
-            # add error state to root-mean-squared-error (rmse)
-            results["position_rmse"] += data["position_error"][:n, :] ** 2
-            results["velocity_rmse"] += data["velocity_error"][:n, :] ** 2
-            results["attitude_rmse"] += data["attitude_error"][:n, :] ** 2
-            results["clock_rmse"] += data["clock_error"][:n, :] ** 2
+                # add filter dop values (includes number of emitters)
+                res_dop = np.dstack((res_dop, data["dop"][:n, :]))
 
-            # add filter standard deviations to mean absolute difference (mae)
-            results["position_filter_std"] += data["position_std_filter"][:n, :]
-            results["velocity_filter_std"] += data["velocity_std_filter"][:n, :]
-            results["attitude_filter_std"] += data["attitude_std_filter"][:n, :]
-            results["clock_filter_std"] += data["clock_std_filter"][:n, :]
-
-            # add filter dop values (includes number of emitters)
-            results["dop"] += data["dop"][:n, :]
-
-        # calculate monte carlo standard deviation of errors
-        results["position_mc_std"] = np.sqrt(
-            results["position_rmse"] - (results["position_error_mean"] ** 2 / N_RUNS) / N_RUNS
-        )
-        results["velocity_mc_std"] = np.sqrt(
-            results["velocity_rmse"] - (results["velocity_error_mean"] ** 2 / N_RUNS) / N_RUNS
-        )
-        results["attitude_mc_std"] = np.sqrt(
-            results["attitude_rmse"] - (results["attitude_error_mean"] ** 2 / N_RUNS) / N_RUNS
-        )
-        results["clock_mc_std"] = np.sqrt(results["clock_rmse"] - (results["clock_error_mean"] ** 2 / N_RUNS) / N_RUNS)
-
-        # calculate mean of states
-        results["position_mean"] /= N_RUNS
-        results["velocity_mean"] /= N_RUNS
-        results["attitude_mean"] /= N_RUNS
-        results["clock_mean"] /= N_RUNS
-
-        # calculate mean of errors
-        results["position_error_mean"] /= N_RUNS
-        results["velocity_error_mean"] /= N_RUNS
-        results["attitude_error_mean"] /= N_RUNS
-        results["clock_error_mean"] /= N_RUNS
-
-        # calculate mean of filter std
-        results["position_filter_std"] = np.sqrt(results["position_filter_std"] / N_RUNS)
-        results["velocity_filter_std"] = np.sqrt(results["velocity_filter_std"] / N_RUNS)
-        results["attitude_filter_std"] = np.sqrt(results["attitude_filter_std"] / N_RUNS)
-        results["clock_filter_std"] = np.sqrt(results["clock_filter_std"] / N_RUNS)
-
-        # calculate rmse of errors
-        results["position_rmse"] = np.sqrt(results["position_rmse"] / N_RUNS)
-        results["velocity_rmse"] = np.sqrt(results["velocity_rmse"] / N_RUNS)
-        results["attitude_rmse"] = np.sqrt(results["attitude_rmse"] / N_RUNS)
-        results["clock_rmse"] = np.sqrt(results["clock_rmse"] / N_RUNS)
-
-        # calculate mean dop values
-        results["dop"] /= N_RUNS
+        results = {
+            "time": time,
+            "position_mean": res_pos.mean(axis=2),
+            "velocity_mean": res_vel.mean(axis=2),
+            "position_error_mean": res_pos_err.mean(axis=2),
+            "velocity_error_mean": res_vel_err.mean(axis=2),
+            "position_rmse": np.sqrt((res_pos_err**2).mean(axis=2)),
+            "velocity_rmse": np.sqrt((res_vel_err**2).mean(axis=2)),
+            "position_filter_std": res_pos_std_filt.mean(axis=2),
+            "velocity_filter_std": res_vel_std_filt.mean(axis=2),
+            "position_mc_std": res_pos_err.std(axis=2),
+            "velocity_mc_std": res_vel_err.std(axis=2),
+            "dop": res_dop.mean(axis=2),
+        }
 
         np.savez_compressed(RESULTS_PATH / scenario / "mc_results", **results)
         results.clear()
@@ -295,5 +239,5 @@ def process_mc_results(time: np.ndarray):
 
 if __name__ == "__main__":
     # freeze_support()
-    # monte_carlo()
-    process_mc_results(np.arange(210))
+    monte_carlo()
+    # process_mc_results(np.arange(200))

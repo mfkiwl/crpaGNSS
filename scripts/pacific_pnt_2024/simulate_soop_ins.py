@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from navsim.configuration import get_configuration, SimulationConfiguration
 from navsim.simulations.measurement import MeasurementSimulation
 from navsim.simulations.ins import INSSimulation
-from navtools.constants import SPEED_OF_LIGHT
+from navtools import SPEED_OF_LIGHT, ecef2enuDcm
 
 from charlizard.navigators.soop_ins import SoopIns
 from charlizard.navigators.structures import GNSSINSConfig
@@ -23,8 +23,9 @@ CONFIG_PATH = PROJECT_PATH / "configs"
 DATA_PATH = PROJECT_PATH / "data"
 RESULTS_PATH = PROJECT_PATH / "results"
 
-CHIP_WIDTH = SPEED_OF_LIGHT / 1.023e6
-WAVELENGTH = SPEED_OF_LIGHT / 1575.42e6
+
+R2D = 180 / np.pi
+LLA_R2D = np.array([R2D, R2D, 1])
 DISABLE_PROGRESS = False
 MEAS_UPDATE = True
 
@@ -51,10 +52,10 @@ def run_simulation(
         clock_type=config.errors.rx_clock,
         imu_model=config.imu.model,
         coupling="tight",
-        T_rcvr=0.2,
+        T_rcvr=1 / config.time.fsim,
     )
     f_sim = int(config.time.fsim)
-    f_update = 10
+    f_update = int(ins_sim.imu_model.f / f_sim)
 
     # * INITIALIZE SIMULATION
     soop_ins = SoopIns(soop_ins_config)
@@ -66,7 +67,8 @@ def run_simulation(
     sim_delta = timedelta(seconds=1 / f_sim)
 
     # * INITIALIZE OUTPUTS
-    n = int(len(meas_sim.observables) / f_update)
+    C_e_n0 = ecef2enuDcm(ins_sim.geodetic_position[0, :] / LLA_R2D)
+    n = len(meas_sim.observables)
     results = {
         "lla": np.zeros((n, 3)),
         "position": np.zeros((n, 3)),
@@ -85,8 +87,7 @@ def run_simulation(
     }
 
     # * RUN SIMULATION
-    # sim_idx = 1
-    out_idx = 0
+    sim_idx = 0
     for imu_idx in tqdm(
         range(ins_sim.time.size),
         total=ins_sim.time.size,
@@ -102,21 +103,21 @@ def run_simulation(
 
         if imu_idx % f_update == 0:  # and (imu_idx > 0):
             # grab true values from path simulator
-            true_clock = np.array([meas_sim.rx_states.clock_bias[imu_idx], meas_sim.rx_states.clock_drift[imu_idx]])
+            true_clock = np.array([meas_sim.rx_states.clock_bias[sim_idx], meas_sim.rx_states.clock_drift[sim_idx]])
 
             # measurement update
             if measurement_update:
                 # ? check if observables are available, sort by key
-                keys = meas_sim.observables[imu_idx].keys()
-                emitter_states = dict(sorted(meas_sim.emitter_states.truth[imu_idx].items()))
-                observables = dict(sorted(meas_sim.observables[imu_idx].items()))
-                # emitters = []
+                keys = meas_sim.observables[sim_idx].keys()
+                emitter_states = dict(sorted(meas_sim.emitter_states.truth[sim_idx].items()))
+                observables = dict(sorted(meas_sim.observables[sim_idx].items()))
+                emitters = []
 
-                emitters = [e for e in meas_sim._MeasurementSimulation__emitters._skyfield_satellites if e.name in keys]
-                names = [e.name for e in emitters]
-                emitters = [emitters[i] for i in sorted(range(len(names)), key=lambda index: names[index])]
+                # emitters = [e for e in meas_sim._MeasurementSimulation__emitters._skyfield_satellites if e.name in keys]
+                # names = [e.name for e in emitters]
+                # emitters = [emitters[i] for i in sorted(range(len(names)), key=lambda index: names[index])]
                 times = [time - delta2, time - delta, time, time + delta, time + delta2]
-                times = meas_sim._MeasurementSimulation__emitters._ts.from_datetimes(times)
+                # times = meas_sim._MeasurementSimulation__emitters._ts.from_datetimes(times)
 
                 # update filter with new observables
                 wavelength = np.array(
@@ -141,33 +142,51 @@ def run_simulation(
                 )
 
             # * LOG RESULTS
-            (
-                results["position"][out_idx, :],
-                results["velocity"][out_idx, :],
-                results["attitude"][out_idx, :],
-                results["lla"][out_idx, :],
-                results["clock"][out_idx, :],
-            ) = soop_ins.extract_states
-            results["position_error"][out_idx, :] = (
-                ins_sim.tangent_position[imu_idx, :] - results["position"][out_idx, :]
-            )
-            results["velocity_error"][out_idx, :] = (
-                ins_sim.tangent_velocity[imu_idx, :] - results["velocity"][out_idx, :]
-            )
-            results["attitude_error"][out_idx, :] = ins_sim.euler_angles[imu_idx, :] - results["attitude"][out_idx, :]
-            results["clock_error"][out_idx, :] = true_clock - results["clock"][out_idx, :]
-            (
-                results["position_std_filter"][out_idx, :],
-                results["velocity_std_filter"][out_idx, :],
-                results["attitude_std_filter"][out_idx, :],
-                results["clock_std_filter"][out_idx, :],
-            ) = soop_ins.extract_stds
-            results["dop"][out_idx, :] = soop_ins.extract_dops
+            # (
+            #     results["position"][sim_idx, :],
+            #     results["velocity"][sim_idx, :],
+            #     results["attitude"][sim_idx, :],
+            #     results["lla"][sim_idx, :],
+            #     results["clock"][sim_idx, :],
+            # ) = soop_ins.extract_states
+            # (
+            #     results["position_std_filter"][sim_idx, :],
+            #     results["velocity_std_filter"][sim_idx, :],
+            #     results["attitude_std_filter"][sim_idx, :],
+            #     results["clock_std_filter"][sim_idx, :],
+            # ) = soop_ins.extract_stds
+            # results["attitude_error"][sim_idx, :] = ins_sim.euler_angles[imu_idx, :] - results["attitude"][sim_idx, :]
+            # results["clock_error"][sim_idx, :] = true_clock - results["clock"][sim_idx, :]
+            # results["dop"][sim_idx, :] = soop_ins.extract_dops
+            # results["position_error"][sim_idx, :] = (
+            #     ins_sim.tangent_position[imu_idx, :] - results["position"][sim_idx, :]
+            # )
+            # results["velocity_error"][sim_idx, :] = (
+            #     ins_sim.tangent_velocity[imu_idx, :] - results["velocity"][sim_idx, :]
+            # )
 
-            out_idx += 1
+            C_e_n = ecef2enuDcm(ins_sim.geodetic_position[imu_idx, :] / LLA_R2D)
+            results["position"][sim_idx, :] = C_e_n0 @ (soop_ins.extract_ecef[0] - ins_sim.ecef_position[0, :])
+            results["velocity"][sim_idx, :] = C_e_n0 @ (soop_ins.extract_ecef[1] - ins_sim.ecef_velocity[0, :])
+            results["attitude"][sim_idx, :] = np.zeros(3)
+            results["clock"][sim_idx, :] = np.zeros(2)
+            results["position_error"][sim_idx, :] = C_e_n @ (
+                ins_sim.ecef_position[imu_idx, :] - soop_ins.extract_ecef[0]
+            )
+            results["velocity_error"][sim_idx, :] = C_e_n @ (
+                ins_sim.ecef_velocity[imu_idx, :] - soop_ins.extract_ecef[1]
+            )
+            results["attitude_error"][sim_idx, :] = np.zeros(3)
+            results["clock_error"][sim_idx, :] = np.zeros(2)
+            results["position_std_filter"][sim_idx, :] = np.sqrt(np.diag(C_e_n @ soop_ins.rx_cov[6:9, 6:9] @ C_e_n.T))
+            results["velocity_std_filter"][sim_idx, :] = np.sqrt(np.diag(C_e_n @ soop_ins.rx_cov[3:6, 3:6] @ C_e_n.T))
+            results["attitude_std_filter"][sim_idx, :] = np.zeros(3)
+            results["clock_std_filter"][sim_idx, :] = np.zeros(2)
+            results["dop"][sim_idx, :] = soop_ins.extract_dops
+
+            sim_idx += 1
             # print(time)
             time += sim_delta
-            # sim_idx += 1
 
     return results
 
@@ -181,10 +200,10 @@ if __name__ == "__main__":
     ins_sim.simulate()
 
     f_rcvr = config.time.fsim
-    f_update = 10
+    f_update = int(ins_sim.imu_model.f / f_rcvr)
     meas_sim = MeasurementSimulation(config)
-    # meas_sim.generate_truth(ins_sim.ecef_position[::f_update, :], ins_sim.ecef_velocity[::f_update, :])
-    meas_sim.generate_truth(ins_sim.ecef_position, ins_sim.ecef_velocity)
+    meas_sim.generate_truth(ins_sim.ecef_position[::f_update, :], ins_sim.ecef_velocity[::f_update, :])
+    # meas_sim.generate_truth(ins_sim.ecef_position, ins_sim.ecef_velocity)
     meas_sim.simulate()
 
     results = run_simulation(config, meas_sim, ins_sim, MEAS_UPDATE, DISABLE_PROGRESS)

@@ -21,6 +21,7 @@ laika = {path = "libs/laika", develop = true}
 navsim = {path = "libs/navsim", develop = true}
 sympy = "^1.12"
 basemap = "^1.4.1"
+scikit-learn = "^1.4.1.post1"
 
 [tool.poetry.group.dev.dependencies]
 snakeviz = "^2.2.0"
