@@ -453,6 +453,7 @@ def plot_trajectory(show: bool = False, save: bool = True):
     ecef0 = ins_sim.ecef_position[0, :]
     e_keys = []
     e_pos = []
+    e_rng = [[], []]
     # for es in meas_sim.emitter_states.truth:
     es = meas_sim.emitter_states.truth[0]
     for k, e in es.items():
@@ -462,7 +463,25 @@ def plot_trajectory(show: bool = False, save: bool = True):
         else:
             e_keys.append(k)
             e_pos.append([C_e_n @ (e.pos - ecef0)])
+
+        if "iridium" in k.casefold():
+            e_rng[0].append(norm(e.pos - ecef0))
+        elif "buoy" in k.casefold():
+            e_rng[1].append(norm(e.pos - ecef0))
     print()
+
+    # plot relative ranges
+    f_rng, ax_rng = plt.subplots(**{"figsize": (10, 8)})
+    m1 = np.mean(e_rng[0])
+    m2 = 0.5 * np.mean(e_rng[1])
+    d = m1 - m2
+    m1 = m1 / d
+    m2 = m2 / d
+    sns.barplot(x=["LEO", "BUOY"], y=[m1 / m2, m2 / m2], ax=ax_rng)
+    sns.barplot(x=["LEO", "BUOY"], y=[m1 / m2, m2 / m2], ax=ax_rng)
+    ax_rng.set(ylabel="Relative Distance")
+    f_rng.tight_layout()
+    f_rng.subplots_adjust(hspace=0.05)
 
     # plot trajectory only
     f_traj, ax_traj = plt.subplots(**{"figsize": (10, 8)})
@@ -571,6 +590,7 @@ def plot_trajectory(show: bool = False, save: bool = True):
 
     # show plots if desired (pixels set based on my lab laptop)
     if show:
+        move_figure(f_rng, 300, 800)
         move_figure(f_traj, 350, 850)
         move_figure(f2, 400, 900)
         plt.show()
@@ -578,10 +598,12 @@ def plot_trajectory(show: bool = False, save: bool = True):
     # save plots if desired
     if save:
         nt.io.ensure_exist(FIGURES_PATH / f"trajectory")
+        f_rng.savefig(FIGURES_PATH / "trajectory" / f"range_difference.jpeg")
         f_traj.savefig(FIGURES_PATH / "trajectory" / f"trajectory.jpeg")
         f2.savefig(FIGURES_PATH / "trajectory" / f"trajectory_with_emitters.jpeg")
 
         pp = PdfPages(FIGURES_PATH / f"_trajectory.pdf")
+        pp.savefig(f_rng)
         pp.savefig(f_traj)
         pp.savefig(f2)
         pp.close()
@@ -601,8 +623,8 @@ if __name__ == "__main__":
     # print("[charlizard] plotting individual results ")
     # plot_individual(show=False, save=True)
 
-    print("[charlizard] plotting comparison of results ")
-    plot_comparison(show=False, save=True)
+    # print("[charlizard] plotting comparison of results ")
+    # plot_comparison(show=False, save=True)
 
-    # print("[charlizard] plotting 2d trajectory ")
-    # plot_trajectory(show=False, save=True)
+    print("[charlizard] plotting 2d trajectory ")
+    plot_trajectory(show=False, save=True)

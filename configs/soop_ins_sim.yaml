@@ -28,7 +28,7 @@ constellations:
     #   signal: iridium
     buoy:
       signal: buoy
-      js: 20.0
+      js: 10.0
 
 errors:
   # ionosphere: klobuchar
