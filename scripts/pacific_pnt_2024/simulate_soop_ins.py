@@ -9,11 +9,11 @@ from navsim.simulations.measurement import MeasurementSimulation
 from navsim.simulations.ins import INSSimulation
 from navtools import SPEED_OF_LIGHT, ecef2enuDcm
 
-from charlizard.navigators.soop_ins import SoopIns
-from charlizard.navigators.structures import GNSSINSConfig
-from charlizard.models.discriminator import (
-    prange_rate_residual_var,
-    prange_residual_var,
+from charlizard.navigators.soop_ins import SoopIns, GNSSINSConfig
+
+from charlizard.estimators.discriminator import (
+    fll_variance,
+    dll_variance,
 )
 
 import matplotlib.pyplot as plt
@@ -91,7 +91,7 @@ def run_simulation(
     for imu_idx in tqdm(
         range(ins_sim.time.size),
         total=ins_sim.time.size,
-        desc=default_logger.GenerateSring("[charlizard] SOOP-INS ", Level.Info, Color.Info),
+        desc="[\u001b[31;1mcharlizard\u001b[0m] SOOP-INS ",
         disable=DISABLE_PROGRESS,
         ascii=".>#",
         bar_format="{desc}{percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{rate_fmt}]",
@@ -128,7 +128,7 @@ def run_simulation(
                 )
                 soop_ins.cn0 = np.array([emitter.cn0 for emitter in observables.values()])
                 meas_prange_rates = np.array([emitter.pseudorange_rate for emitter in observables.values()])
-                noise = np.random.randn(soop_ins.cn0.size) * prange_rate_residual_var(soop_ins.cn0, 0.02, wavelength)
+                noise = np.random.randn(soop_ins.cn0.size) * wavelength**2 * fll_variance(soop_ins.cn0, 0.02)
 
                 soop_ins.measurement_update(
                     noise,
@@ -170,12 +170,8 @@ def run_simulation(
             results["velocity"][sim_idx, :] = C_e_n0 @ (soop_ins.extract_ecef[1] - ins_sim.ecef_velocity[0, :])
             results["attitude"][sim_idx, :] = np.zeros(3)
             results["clock"][sim_idx, :] = np.zeros(2)
-            results["position_error"][sim_idx, :] = C_e_n @ (
-                ins_sim.ecef_position[imu_idx, :] - soop_ins.extract_ecef[0]
-            )
-            results["velocity_error"][sim_idx, :] = C_e_n @ (
-                ins_sim.ecef_velocity[imu_idx, :] - soop_ins.extract_ecef[1]
-            )
+            results["position_error"][sim_idx, :] = C_e_n @ (ins_sim.ecef_position[imu_idx, :] - soop_ins.extract_ecef[0])
+            results["velocity_error"][sim_idx, :] = C_e_n @ (ins_sim.ecef_velocity[imu_idx, :] - soop_ins.extract_ecef[1])
             results["attitude_error"][sim_idx, :] = np.zeros(3)
             results["clock_error"][sim_idx, :] = np.zeros(2)
             results["position_std_filter"][sim_idx, :] = np.sqrt(np.diag(C_e_n @ soop_ins.rx_cov[6:9, 6:9] @ C_e_n.T))

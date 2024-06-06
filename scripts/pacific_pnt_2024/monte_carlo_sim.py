@@ -118,14 +118,14 @@ def monte_carlo():
         nt.io.ensure_exist(RESULTS_PATH / scenario)
 
         # generate tqdm description with a timestamp if available
-        if is_log_utils_available:
-            prompt_string = default_logger.GenerateSring(
-                f"[charlizard] Monte Carlo for {scenario.upper()} ",
-                Level.Info,
-                Color.Info,
-            )
-        else:
-            prompt_string = f"[charlizard] Monte Carlo for {scenario.upper()} "
+        # if is_log_utils_available:
+        #     prompt_string = default_logger.GenerateSring(
+        #         f"[charlizard] Monte Carlo for {scenario.upper()} ",
+        #         Level.Info,
+        #         Color.Info,
+        #     )
+        # else:
+        prompt_string = f"[\u001b[31;1mcharlizard\u001b[0m] Monte Carlo for {scenario.upper()} "
 
         # # TODO: figure out why pickling 'Satrec' object does not work
         # with pool.Pool(processes=cpu_count()) as p:

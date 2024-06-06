@@ -1,5 +1,5 @@
 import numpy as np
-from charlizard.algorithms.ls import LeastSquares
+from charlizard.estimators.ls import LeastSquares
 from charlizard.utils.combinations import combinations
 
 import matplotlib.pyplot as plt

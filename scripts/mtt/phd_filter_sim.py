@@ -14,9 +14,10 @@
 |==================================================================================================|
 """
 
+import os
 import numpy as np
 import pandas as pd
-import charlizard.algorithms.phd as phd
+import charlizard.estimators.phd as phd
 from tqdm import tqdm
 from pathlib import Path
 import navtools as nt
@@ -24,7 +25,8 @@ from multiprocessing import pool, cpu_count, freeze_support
 
 PROJECT_PATH = Path(__file__).parents[2]
 RESULTS_PATH = PROJECT_PATH / "results" / "mtt"
-DATAFILE = PROJECT_PATH / "data" / "multiple_traj.xlsx"
+# DATAFILE = PROJECT_PATH / "data" / "multiple_traj.xlsx"
+DATAFILE = PROJECT_PATH / "data" / "dynamic_data.xlsx"
 # SCENARIO = "multi_emitter_dynamic"
 # SCENARIO = "two_emitter_dynamic"
 # SCENARIO = "single_emitter_dynamic"
@@ -37,10 +39,14 @@ N_RUNS = 100
 
 # * ##### generate_scenario #####
 def generate_scenario(scenario: str):
-    r = pd.read_excel(DATAFILE, sheet_name="rcvr").to_numpy()
-    e1 = pd.read_excel(DATAFILE, sheet_name="emit1").to_numpy()
-    e2 = pd.read_excel(DATAFILE, sheet_name="emit2").to_numpy()
-    e3 = pd.read_excel(DATAFILE, sheet_name="emit3").to_numpy()
+    # r = pd.read_excel(DATAFILE, sheet_name="rcvr").to_numpy()
+    # e1 = pd.read_excel(DATAFILE, sheet_name="emit1").to_numpy()
+    # e2 = pd.read_excel(DATAFILE, sheet_name="emit2").to_numpy()
+    # e3 = pd.read_excel(DATAFILE, sheet_name="emit3").to_numpy()
+    r = pd.read_excel(DATAFILE, sheet_name="Sheet1").to_numpy()
+    e3 = pd.read_excel(DATAFILE, sheet_name="Sheet2").to_numpy()
+    e2 = pd.read_excel(DATAFILE, sheet_name="Sheet3").to_numpy()
+    e1 = pd.read_excel(DATAFILE, sheet_name="Sheet3").to_numpy()
 
     rcvr_pos = r[:, :2]
     rcvr_vel = r[:, 2:]
@@ -168,8 +174,8 @@ def run_phd_filter(scenario: str, run_i: int):
     Conf = phd.PHDFilterConfig(
         T=1.0,
         order=2,
-        vel_std=0.1,
-        acc_std=0.1,
+        vel_std=0.25,
+        acc_std=0.05,
         aoa_std=2.0,
         tdoa_std=40.0,
         aoa_clutter=1,
@@ -177,12 +183,12 @@ def run_phd_filter(scenario: str, run_i: int):
         aoa_clutter_range=[0.0, 2.0 * np.pi],
         tdoa_clutter_range=[-500.0, 500.0],
         aoa_update_rate=1,
-        tdoa_update_rate=15,
+        tdoa_update_rate=30,
         p_d=0.98,
         p_s=0.99,
-        prune_threshold=1e-3,
-        merge_threshold=3,
-        cap_threshold=5,
+        prune_threshold=0.01,
+        merge_threshold=2,
+        cap_threshold=10,
     )
 
     # initialize filter
@@ -191,7 +197,7 @@ def run_phd_filter(scenario: str, run_i: int):
     filt.gen_meas()
 
     # x_init = np.array([[2.5, 2.5, 2.0, 2.0, 1.0, 1.0]]).reshape((6, 1))
-    # P_init = np.array([[np.diag([50.0, 50.0, 5.0, 5.0, 1.0, 1.0])]]).reshape((6, 6, 1)) ** 2
+    # P_init = np.array([[np.diag([25.0, 25.0, 1.0, 1.0, 0.1, 0.1])]]).reshape((6, 6, 1)) ** 2
     x_init = np.array([[2.5, 2.5, 2.0, 2.0]]).reshape((4, 1))
     P_init = np.array([[np.diag([50.0, 50.0, 5.0, 5.0])]]).reshape((4, 4, 1)) ** 2
     m_init = np.array([0.1])
@@ -229,26 +235,30 @@ def run_phd_filter(scenario: str, run_i: int):
     results["pos_err"][:] = filt.Est.x_err
 
     # --- save ---
-    nt.io.ensure_exist(RESULTS_PATH / scenario)
-    np.savez_compressed(RESULTS_PATH / scenario / f"run{run_i}", **results)
+    # nt.io.ensure_exist(RESULTS_PATH / scenario)
+    # np.savez_compressed(RESULTS_PATH / scenario / f"run{run_i}", **results)
+    nt.io.savemat(RESULTS_PATH / scenario / "tyler_data.mat", results)
     return True
 
 
 if __name__ == "__main__":
     freeze_support()
     # run_phd_filter(SCENARIO[0], 0)
-    for scenario in SCENARIO:
-        prompt_string = f"[charlizard] Monte Carlo for {scenario.upper()} "
+    run_phd_filter("two_emitter_dynamic", 0)
 
-        # run in parallel
-        with pool.Pool(processes=cpu_count()) as p:
-            args = [(scenario, i) for i in range(N_RUNS)]
-            for b in tqdm(
-                p.starmap(run_phd_filter, args),
-                total=N_RUNS,
-                desc=prompt_string,
-                ascii=".>#",
-                bar_format="{desc}{percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{rate_fmt}]",
-                ncols=120,
-            ):
-                pass
+    # for scenario in SCENARIO:
+    #     os.remove(RESULTS_PATH / scenario / "mc_results.npz")
+    #     prompt_string = f"[\u001b[31;1mcharlizard\u001b[0m] Monte Carlo for {scenario.upper()} "
+
+    #     # run in parallel
+    #     with pool.Pool(processes=cpu_count()) as p:
+    #         args = [(scenario, i) for i in range(N_RUNS)]
+    #         for b in tqdm(
+    #             p.starmap(run_phd_filter, args),
+    #             total=N_RUNS,
+    #             desc=prompt_string,
+    #             ascii=".>#",
+    #             bar_format="{desc}{percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{rate_fmt}]",
+    #             ncols=120,
+    #         ):
+    #             pass

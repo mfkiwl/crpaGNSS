@@ -16,12 +16,10 @@
 """
 
 import numpy as np
+from dataclasses import dataclass
 from scipy.linalg import norm, inv, pinv, cholesky, expm
 
-from charlizard.navigators.structures import GNSSINSConfig
-from charlizard.models.correlators import Correlators
-from charlizard.models.discriminator import prange_rate_residual_var, prange_residual_var, fll_error, dll_error
-from charlizard.models.lock_detectors import CN0_m2m4_estimator, CN0_beaulieu_estimator
+from charlizard.estimators.discriminator import fll_variance
 
 from navsim.error_models.clock import get_clock_allan_variance_values
 from navsim.error_models.imu import get_imu_allan_variance_values
@@ -43,6 +41,24 @@ OMEGA_IE_E = skew(OMEGA_IE)
 # I = np.eye(23)
 I = np.eye(17)
 # I = np.eye(11)
+
+
+@dataclass
+class GNSSINSConfig:
+    T: float  #! integration period for the imu [s]
+    tap_spacing: float  #! early,prompt,late correlator tap/chip spacing
+    innovation_stdev: float  #! normalized innovation filter threshold
+    cn0_buffer_len: int  #! number of correlator outputs to use in cn0 estimation
+    cn0: np.ndarray  #! initial receiver cn0
+    pos: np.ndarray  #! initial receiver ecef position
+    vel: np.ndarray  #! initial receiver ecef velocity
+    att: np.ndarray  #! initial receiver roll, pitch, yaw [deg]
+    clock_bias: float  #! initial receiver clock bias
+    clock_drift: float  #! initial receiver clock drift
+    clock_type: str  #! receiver oscillator type
+    imu_model: str  #! IMU specifications
+    coupling: str  #! navigator coupling scheme ('tight' or 'deep')
+    T_rcvr: int  #! integration period of the receiver [s]
 
 
 class SoopIns:
@@ -207,7 +223,7 @@ class SoopIns:
             # measurement update
             if dy.size > 0:
                 PHt = self.rx_cov @ H.T
-                K = self.rx_cov @ H.T @ inv(H @ self.rx_cov @ H.T + R)
+                K = PHt @ inv(H @ PHt + R)
                 I_KH = I - K @ H
                 self.rx_state += K @ dy
                 self.rx_cov = (I_KH @ self.rx_cov @ I_KH.T) + (K @ R @ K.T)
@@ -487,7 +503,7 @@ class SoopIns:
 
     #! === Measurement Noise Covariance ===
     def __generate_R(self):
-        self.__R = 1.1 * prange_rate_residual_var(self.cn0, 0.02, self.wavelength)
+        self.__R = 1.1 * self.wavelength**2 * fll_variance(self.cn0, 0.02)
 
     #! === doppler measurement ===
     def __doppler(self, pos, vel, clk_drift, sv_pos, sv_vel):

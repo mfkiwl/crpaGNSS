@@ -14,6 +14,8 @@
 |==================================================================================================|
 """
 
+# TODO: rewrite to incorperate general models instead of only aoa/tdoa
+
 import numpy as np
 from scipy.linalg import norm, inv, cholesky, block_diag, det
 from scipy.stats.distributions import chi2
@@ -381,7 +383,8 @@ class PHDFilter:
                 ]
             )
             self.I = np.eye(4)
-            self.default_P = np.diag([50.0, 50.0, 5.0, 5.0]) ** 2
+            # self.default_P = np.diag([50.0, 50.0, 5.0, 5.0]) ** 2
+            self.default_P = np.diag([25.0, 25.0, 1.0, 1.0]) ** 2
         elif conf.order == 3:
             t = self.T
             qv = conf.vel_std
@@ -407,7 +410,8 @@ class PHDFilter:
                 ]
             )
             self.I = np.eye(6)
-            self.default_P = np.diag([50.0, 50.0, 5.0, 5.0, 1.0, 1.0]) ** 2
+            # self.default_P = np.diag([50.0, 50.0, 5.0, 5.0, 1.0, 1.0]) ** 2
+            self.default_P = np.diag([25.0, 25.0, 1.0, 1.0, 0.1, 0.1]) ** 2
 
     def __aoa_model(self, x, rcvr_pos):
         dE = x[0] - rcvr_pos[:, 0]
@@ -491,7 +495,7 @@ class PHDFilter:
             for i in idx:
                 dm = m_update[:, i] - m_update[:, j]
                 val = dm[None, :] @ inv_P @ dm[:, None]
-                if val <= self.merge_threshold:
+                if val.squeeze() <= self.merge_threshold:
                     ij = np.append(ij, i)
 
             if el == 0:
