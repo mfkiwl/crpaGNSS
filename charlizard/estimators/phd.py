@@ -14,7 +14,7 @@
 |==================================================================================================|
 """
 
-# TODO: rewrite to incorperate general models instead of only aoa/tdoa
+# TODO: rewrite to incorporate general models instead of only aoa/tdoa
 
 import numpy as np
 from scipy.linalg import norm, inv, cholesky, block_diag, det
