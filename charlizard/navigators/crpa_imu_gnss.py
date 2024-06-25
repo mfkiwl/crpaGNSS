@@ -71,6 +71,7 @@ class CRPA_IMU_GNSS:
         self.tap_spacing = conf.tap_spacing
         self.TOW = conf.TOW
         self.frame = conf.frame
+        self.innovation_stdev = conf.innovation_stdev
 
         # cn0 estimation init
         self.num_sv = conf.cn0.size
@@ -141,10 +142,10 @@ class CRPA_IMU_GNSS:
             clock_config = ns.error_models.get_clock_allan_variance_values("high_quality_tcxo")
         else:
             clock_config = ns.error_models.get_clock_allan_variance_values(conf.clock_type)
-        self.S_rg = (1.1 * imu_model.N_gyr) ** 2  # * self.T
-        self.S_ra = (1.1 * imu_model.N_acc) ** 2  # * self.T
-        self.S_bad = (1.1 * imu_model.B_acc) ** 2  # / self.T
-        self.S_bgd = (1.1 * imu_model.B_gyr) ** 2  # / self.T
+        self.S_rg = 1.1 * imu_model.N_gyr**2  # * self.T
+        self.S_ra = 1.1 * imu_model.N_acc**2  # * self.T
+        self.S_bad = 1.1 * imu_model.B_acc**2  # / self.T
+        self.S_bgd = 1.1 * imu_model.B_gyr**2  # / self.T
         self.S_b = 1.1 * clock_config.h0 / 2
         self.S_d = 1.1 * clock_config.h2 * 2 * np.pi**2
 
@@ -195,9 +196,7 @@ class CRPA_IMU_GNSS:
             self.psr = psr
             self.psr_dot = psr_dot
             # self.__make_unit_vec(az, el)
-            self.dopp_unit_vec = (
-                -(dv * r[:, None] ** 2 - dr * np.sum(dv * dr, axis=1)[:, None]) / r[:, None] ** 3
-            ) @ C_n_e
+            self.dopp_unit_vec = (-(dv * r[:, None] ** 2 - dr * np.sum(dv * dr, axis=1)[:, None]) / r[:, None] ** 3) @ C_n_e
             self.unit_vec = -u @ C_n_e
 
         return psr, psr_dot, az, el
@@ -214,11 +213,19 @@ class CRPA_IMU_GNSS:
             self.init_cov()
             self.is_cov_init = True
 
-        # TODO: innovation filter
+        # innovation filter
+        S = self.H @ self.P @ self.H.T + self.R
+        norm_dy = np.abs(self.dy / np.sqrt(S.diagonal()))
+        mask = norm_dy < self.innovation_stdev
+        self.dy = self.dy[mask]
+        self.H = self.H[mask, :]
+        self.R = np.diag(self.R.diagonal()[mask])
+
+        # update
         S = self.H @ self.P @ self.H.T + self.R
         K = self.P @ self.H.T @ inv(S)
-        self.P -= K @ self.H @ self.P
-        # self.P -= K @ S @ K.T
+        # self.P -= K @ self.H @ self.P
+        self.P -= K @ S @ K.T
         self.P = 0.5 * (self.P + self.P.T)
         self.x += K @ self.dy
 
@@ -257,11 +264,25 @@ class CRPA_IMU_GNSS:
         self.cn0_count += 1
         if self.cn0_count == self.max_cn0_count:
             # re-estimate cn0 (moving average filter)
+            # ip = np.ma.array(self.cn0_I_buf, mask=np.isnan(self.cn0_I_buf))
+            # qp = np.ma.array(self.cn0_Q_buf, mask=np.isnan(self.cn0_Q_buf))
+            # cn0_pow = cn0_m2m4_estimate2d(ip, qp, self.dt)
             cn0_pow = cn0_m2m4_estimate2d(self.cn0_I_buf, self.cn0_Q_buf, self.dt)
+            o_15dB = 31.6 * np.ones(self.num_sv)  # dont use info less than 15 dB = 31.6 W
+            cn0_pow = np.where(np.isnan(cn0_pow), self.cn0, cn0_pow)
+            cn0_pow = np.where(cn0_pow < 31.6, o_15dB, cn0_pow)
             self.cn0 = 0.95 * self.cn0 + 0.05 * cn0_pow
             self.cn0_dB = 10.0 * np.log10(self.cn0)
             self.cn0_count = 0
-            # print(f"CN0 dB: {self.__cn0_dB.mean()}")
+        # if self.cn0_count == self.max_cn0_count:
+        #     prompt = np.sqrt(self.cn0_I_buf**2 + self.cn0_Q_buf**2)  # account for non-phase-lock
+        #     if self.cn0_I_buf_prev is not None:
+        #         cn0_pow = cn0_beaulieu_estimate2d(prompt, self.cn0_I_buf_prev, self.dt)
+        #         self.cn0 = 0.95 * self.cn0 + 0.05 * cn0_pow
+        #         self.cn0_dB = 10.0 * np.log10(self.cn0)
+        #     self.cn0_count = 0
+        #     self.cn0_I_buf_prev = prompt
+        # print(f"CN0 dB: {self.__cn0_dB.mean()}")
 
         # calculate discriminators
         self.freq_err = fll_atan2_normalized(c.ip1[:, 0], c.ip2[:, 0], c.qp1[:, 0], c.qp2[:, 0], self.dt)
@@ -290,7 +311,7 @@ class CRPA_IMU_GNSS:
             self.P = self.A @ self.P @ self.A.T + self.Q
             PCt = self.P @ self.H.T
             K = PCt @ inv(self.H @ PCt + self.R)
-            self.P = (self.I - K @ self.H) @ self.P
+            self.P -= K @ self.H @ self.P
 
             delta_diag_P = np.diag(previous_P - self.P)
 
@@ -348,9 +369,7 @@ class CRPA_IMU_GNSS:
         h_plus = h + self.__h_sign * (vh + vh_plus) * dt / 2.0
         lat_plus = lat + (vn / (Rn + h) + vn_plus / (Rn + h_plus)) * dt / 2.0
         Re_plus = nt.transverseRadius(lat_plus)
-        lon_plus = (
-            lon + ((ve / ((Re + h) * np.cos(lat))) + (ve_plus / ((Re_plus + h_plus) * np.cos(lat_plus)))) * dt / 2.0
-        )
+        lon_plus = lon + ((ve / ((Re + h) * np.cos(lat))) + (ve_plus / ((Re_plus + h_plus) * np.cos(lat_plus)))) * dt / 2.0
         p_new = np.array([lat_plus, lon_plus, h_plus])
 
         return q_new, C_new, v_new, p_new
@@ -577,9 +596,7 @@ class CRPA_IMU_GNSS:
         F_21_21t = F21 @ F21.T
         F_21_C = F21 @ C
 
-        clk_q = LIGHT_SPEED**2 * np.array(
-            [[S_b * dt + S_d / 3.0 * dt**3, S_d / 2.0 * dt**2], [S_d / 2.0 * dt**2, S_d * dt]]
-        )
+        clk_q = LIGHT_SPEED**2 * np.array([[S_b * dt + S_d / 3.0 * dt**3, S_d / 2.0 * dt**2], [S_d / 2.0 * dt**2, S_d * dt]])
 
         Q11 = (S_rg * dt + (S_bgd * dt**3) / 3) * I3
         Q15 = (S_bgd / 2 * dt**2) * C
@@ -588,9 +605,7 @@ class CRPA_IMU_GNSS:
         Q24 = (S_bad / 2 * dt**2) * C
         Q25 = (S_bad / 3 * dt**3) * F_21_C
         Q31 = ((S_rg * dt**3) / 3 + (S_bgd * dt**5) / 5) * (T_r_p @ F21)
-        Q32 = ((S_ra * dt**2) / 2 + (S_bad * dt**4) / 4) * T_r_p + (
-            (S_rg * dt**4) / 4 + (S_bgd * dt**6) / 6
-        ) * (T_r_p @ F_21_21t)
+        Q32 = ((S_ra * dt**2) / 2 + (S_bad * dt**4) / 4) * T_r_p + ((S_rg * dt**4) / 4 + (S_bgd * dt**6) / 6) * (T_r_p @ F_21_21t)
         Q33 = ((S_ra * dt**3) / 3 + (S_bad * dt**5) / 5) * (T_r_p @ T_r_p) + (
             (S_rg * dt**5) / 5 + (S_bgd * dt**7) / 7
         ) * (T_r_p @ F_21_21t @ T_r_p)

@@ -26,6 +26,7 @@ import charlizard.models.bpsk_correlator as bpsk
 import charlizard.models.crpa_gain_pattern as gain
 import charlizard.navigators.crpa_imu_gnss as cig
 from charlizard.plotting.geoplot import geoplot, Geoplot
+from charlizard.plotting.plot_window import plotWindow
 
 
 PROJECT_PATH = Path(__file__).parents[2]
@@ -61,7 +62,7 @@ def calc_true_observables(
 #! === generate_antenna_array ===
 def generate_antenna_array(n_ant: int) -> np.ndarray:
     if n_ant == 1:
-        Z = np.zeros(3)
+        Z = np.zeros((1, 3))
     elif n_ant == 2:  # 2 ELEMENT
         Z = 0.5 * np.array([[0, 0, 0], [WAVELENGTH, 0, 0]])
     elif n_ant == 3:  # 3 ELEMENT
@@ -82,11 +83,20 @@ def generate_imu_noise(
 
     # misalignment, bias, awgn+markov
     imu = ns.error_models.get_imu_allan_variance_values(model)
-    M_gyr, M_acc = nt.euler2dcm(np.random.randn(3) * 1.0 / R2D).T, nt.euler2dcm(np.random.randn(3) * 1.0 / R2D).T
-    b_gyr, b_acc = np.random.randn(3) * 1.0 / R2D, np.random.randn(3) * 0.25
     n_gyr, n_acc = ns.error_models.compute_imu_errors(n, imu)
+    if model.casefold() == "tactical":
+        M_gyr, M_acc = np.eye(3), np.eye(3)
+        b_gyr, b_acc = np.zeros(3), np.zeros(3)
+    elif model.casefold() == "industrial":
+        M_gyr, M_acc = nt.euler2dcm(np.random.randn(3) * 0.05 / R2D).T, nt.euler2dcm(np.random.randn(3) * 0.05 / R2D).T
+        b_gyr, b_acc = np.random.randn(3) * 0.25 / R2D, np.random.randn(3) * 0.025
+    elif model.casefold() == "consumer":
+        M_gyr, M_acc = nt.euler2dcm(np.random.randn(3) * 0.1 / R2D).T, nt.euler2dcm(np.random.randn(3) * 0.1 / R2D).T
+        b_gyr, b_acc = np.random.randn(3) * 1.0 / R2D, np.random.randn(3) * 0.1
 
-    return (meas_gyr @ M_gyr + b_gyr + n_gyr, meas_acc @ M_acc + b_acc + n_acc)
+    # return (meas_gyr @ M_gyr + b_gyr + n_gyr, meas_acc @ M_acc + b_acc + n_acc)
+    return meas_gyr + n_gyr, meas_acc + n_acc
+    # return meas_gyr, meas_acc
 
 
 #! === generate_clock_noise ===
@@ -129,13 +139,15 @@ def initialize_rcvr(
     pos = nt.enu2lla(np.random.randn(3) * init_pva_err[0:3], lla0) * LLA_R2D
     vel = nt.ecef2enuv(data["rcvr_vel"], lla0) + np.random.randn(3) * init_pva_err[3:6]
     att = data["rcvr_att"] + np.random.randn(3) * init_pva_err[6:9]
+
+    innov_std = 3.0 if attenuation <= 10.0 else (2.0 if attenuation <= 25.0 else (1.5 if attenuation <= 30 else 1.0))
     cn0 = (data["sv_cn0"] - attenuation) if n_ant == 1 else (data["sv_cn0"] - attenuation + 10 * np.log10(n_ant))
 
     # create config
     n_sv = cn0.size
     conf = cig.DIConfig(
         T=1.0 / f_rcvr,
-        innovation_stdev=3.0,
+        innovation_stdev=innov_std,
         cn0_buffer_len=50,
         cn0=cn0,
         tap_spacing=0.5,
@@ -157,7 +169,7 @@ def initialize_rcvr(
     # start rcvr
     rcvr = cig.CRPA_IMU_GNSS(conf)
     corr = bpsk.CorrelatorSim(conf.wavelength, conf.chip_width, conf.tap_spacing, conf.T)
-    crpa = gain.CRPAGainPattern(conf.ant_body_pos, conf.wavelength)
+    crpa = gain.CRPAGainPattern(conf.ant_body_pos, conf.wavelength) if conf.mode == 1 else None
 
     return (conf, meas, h5, rcvr, corr, crpa, lla0, n)
 
@@ -252,7 +264,7 @@ def run_rcvr(args):
                     T_int,
                     False,
                 )
-                if j == 0 and k == 0:
+                if j == 0 and k == 0 and conf.mode == 1:
                     crpa.set_expected_doa(az, el)
 
                 # true observables
@@ -350,12 +362,12 @@ def run_rcvr(args):
 #! -------------------------------------------------------------------------------------------------
 if __name__ == "__main__":
     params = {
-        "scenario": "imu_devall_drive_1000hz",
+        "scenario": "dynamic",
         "imu_model": "consumer",
         "clock_model": "high_quality_tcxo",
-        "n_ant": 4,
-        "attenuation": 0.0,
-        "init_pva_err": [3.0, 3.0, 5.0, 0.1, 0.1, 0.15, 3.0, 3.0, 10.0],
+        "n_ant": 2,
+        "attenuation": 25.0,
+        "init_pva_err": np.zeros(9),  # [3.0, 3.0, 5.0, 0.1, 0.1, 0.15, 3.0, 3.0, 10.0],
         "f_sim": 1000,
         "f_imu": 100,
         "f_rcvr": 50,
@@ -367,6 +379,7 @@ if __name__ == "__main__":
 
     # fmt: off
     t = np.arange(results["lla"].shape[0]) / 50.0
+    pw = plotWindow()
 
     # * position, velocity, bias, drift plot results
     h1, ax1 = plt.subplots(nrows=3, ncols=1)
@@ -390,6 +403,7 @@ if __name__ == "__main__":
     ax1[1].grid(True, which="both")
     ax1[2].minorticks_on()
     ax1[2].grid(True, which="both")
+    pw.addPlot("pos", h1)
 
     h2, ax2 = plt.subplots(nrows=3, ncols=1)
     h2.suptitle("ENU Velocity Error")
@@ -412,6 +426,7 @@ if __name__ == "__main__":
     ax2[1].grid(True, which="both")
     ax2[2].minorticks_on()
     ax2[2].grid(True, which="both")
+    pw.addPlot("vel", h2)
 
     results["attitude_error"][results["attitude_error"] > 180] -= 180
     results["attitude_error"][results["attitude_error"] < -180] += 180
@@ -438,6 +453,7 @@ if __name__ == "__main__":
     ax3[1].grid(True, which="both")
     ax3[2].minorticks_on()
     ax3[2].grid(True, which="both")
+    pw.addPlot("att", h3)
 
     h4, ax4 = plt.subplots(nrows=2, ncols=1)
     h4.suptitle("Clock Errors")
@@ -454,6 +470,7 @@ if __name__ == "__main__":
     ax4[0].grid(True, which="both")
     ax4[1].minorticks_on()
     ax4[1].grid(True, which="both")
+    pw.addPlot("clk", h4)
 
     # * 2d position plot
     h5, ax5 = plt.subplots()
@@ -467,6 +484,7 @@ if __name__ == "__main__":
     ax5.axis("square")
     ax5.grid()
     ax5.legend()
+    pw.addPlot("enu", h5)
 
     # * dops
     h6, ax6 = plt.subplots()
@@ -475,6 +493,7 @@ if __name__ == "__main__":
     ax6.set_ylabel("DOP")
     ax6.set_xlabel("Time [s]")
     ax6.legend(["GDOP", "PDOP", "HDOP", "VDOP", "TDOP", "# Emitters"])
+    pw.addPlot("dop", h6)
 
     # * cn0
     h7, ax7 = plt.subplots()
@@ -483,6 +502,7 @@ if __name__ == "__main__":
     ax7.set_ylabel("dB-Hz")
     ax7.set_xlabel("Time [s]")
     ax7.legend()
+    pw.addPlot("cn0", h7)
 
     # #* phase discriminator
     # h8, ax8 = plt.subplots()
@@ -492,25 +512,26 @@ if __name__ == "__main__":
     # ax8.set_ylabel("Cycles")
     # ax8.set_xlabel("Time [s]")
 
-    #* geoplot
-    h9, ax9 = geoplot(
-        lon=data["rcvr_lla"][:, 1],
-        lat=data["rcvr_lla"][:, 0],
-        figsize=(10, 8),
-        plot_init_pos=False,
-        tiles="satellite",
-        **{"color": "k", "s": 30, "label": "Truth"},
-    )
-    _, _ = geoplot(
-        lon=results["lla"][:, 1],
-        lat=results["lla"][:, 0],
-        fig=h9,
-        ax=ax9,
-        plot_init_pos=True,
-        tiles="satellite",
-        **{"color": "r", "s": 5, "label": "VP"},
-    )
-    ax9.legend()
+    # #* geoplot
+    # h9, ax9 = geoplot(
+    #     lon=data["rcvr_lla"][:, 1],
+    #     lat=data["rcvr_lla"][:, 0],
+    #     figsize=(10, 8),
+    #     plot_init_pos=False,
+    #     tiles="satellite",
+    #     **{"color": "k", "s": 30, "label": "Truth"},
+    # )
+    # _, _ = geoplot(
+    #     lon=results["lla"][:, 1],
+    #     lat=results["lla"][:, 0],
+    #     fig=h9,
+    #     ax=ax9,
+    #     plot_init_pos=True,
+    #     tiles="satellite",
+    #     **{"color": "r", "s": 5, "label": "VP"},
+    # )
+    # ax9.legend()
 
-    plt.show()
+    # plt.show()
+    pw.show()
     # fmt: on

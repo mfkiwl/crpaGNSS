@@ -18,7 +18,7 @@ errors:
 
 imu:
   osr: 1
-  mobility: [3.0, 1.5, 6.0]
+  mobility: [1.0, 10.0, 60.0]
   model: consumer
 
 constellations:
@@ -28,8 +28,9 @@ constellations:
       signal: gps
       
 mc_params:
-  scenarios: ["static", "dynamic", "static_w_crpa", "dynamic_w_crpa"]
-  attenuation: [0, 5, 10, 15, 20, 22.5, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 37.5, 40]
+  scenarios: ["static", "dynamic"]
+  # attenuation: [0, 5, 10, 15, 20, 22.5, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 37.5, 40]
+  attenuation: [0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0]
   imu_models: ["consumer", "industrial", "tactical"]
   n_ant: [1, 2, 3, 4]
   n_runs: 100

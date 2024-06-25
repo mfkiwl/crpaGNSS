@@ -38,9 +38,7 @@ class Correlators:
 
 
 class CorrelatorSim:
-    def __init__(
-        self, wavelength: np.ndarray = None, chip_width: np.ndarray = None, tap_spacing: float = None, dt: float = None
-    ):
+    def __init__(self, wavelength: np.ndarray = None, chip_width: np.ndarray = None, tap_spacing: float = None, dt: float = None):
         # constants
         self.__T = 0.0 if dt is None else dt
         self.__chip_width = np.empty(0) if chip_width is None else chip_width
@@ -247,10 +245,10 @@ class CorrelatorSim:
 
             # full-period correlators
             self.__corr.IE[i] = A * R[0] * F * P.real + np.random.randn(N)
-            # self.__corr.IP[i] = A * R[1] * F * P.real + np.random.randn(N)
-            self.__corr.IP[i] = self.__corr.ip1[i] + self.__corr.ip2[i]
+            self.__corr.IP[i] = A * R[1] * F * P.real + np.random.randn(N)
+            # self.__corr.IP[i] = self.__corr.ip1[i] + self.__corr.ip2[i]
             self.__corr.IL[i] = A * R[2] * F * P.real + np.random.randn(N)
             self.__corr.QE[i] = A * R[0] * F * P.imag + np.random.randn(N)
-            # self.__corr.QP[i] = A * R[1] * F * P.imag + np.random.randn(N)
-            self.__corr.QP[i] = self.__corr.qp1[i] + self.__corr.qp2[i]
+            self.__corr.QP[i] = A * R[1] * F * P.imag + np.random.randn(N)
+            # self.__corr.QP[i] = self.__corr.qp1[i] + self.__corr.qp2[i]
             self.__corr.QL[i] = A * R[2] * F * P.imag + np.random.randn(N)

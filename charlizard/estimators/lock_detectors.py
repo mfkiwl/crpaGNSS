@@ -73,7 +73,7 @@ def cn0_m2m4_estimate(IPs: np.ndarray, QPs: np.ndarray, T: float) -> float:
     return cn0_dB, cn0_pow
 
 
-@njit(cache=True, fastmath=True)
+# @njit(cache=True, fastmath=True)
 def cn0_m2m4_estimate2d(IPs: np.ndarray, QPs: np.ndarray, T: float) -> float:
     # 2nd and 4th moments
     M = IPs.shape[0]
@@ -109,6 +109,26 @@ def cn0_beaulieu_estimate(IPs: np.ndarray, prev_IPs: np.ndarray, T: float) -> fl
     cn0_pow = (1.0 / (snr / N)) / T
     cn0_dB = 10.0 * np.log10(cn0_pow)
     return cn0_dB, cn0_pow
+
+
+# * === cn0_beaulieu_estimate2d ===
+@njit(cache=True, fastmath=True)
+def cn0_beaulieu_estimate2d(IPs: np.ndarray, prev_IPs: np.ndarray, T: float) -> float:
+    M = IPs.shape[0]
+    N = IPs.shape[1]
+    snr = np.zeros(M)
+    for ii in range(N):
+        Pn = np.abs(IPs[:, ii]) - np.abs(prev_IPs[:, ii]) ** 2
+        Pd = 0.5 * (IPs[:, ii] * IPs[:, ii] + prev_IPs[:, ii] * prev_IPs[:, ii])
+        snr += Pn / Pd
+    snr = 1.0 / (snr / N)
+
+    # Pn = np.abs(IPs) - np.abs(prev_IPs) ** 2
+    # Pd = 0.5 * (IPs * IPs + prev_IPs * prev_IPs)
+    # snr = 1.0 / np.mean(Pn / Pd, axis=1)
+
+    cn0_pow = snr / T
+    return cn0_pow
 
 
 # * === carrier_lock_detector ===

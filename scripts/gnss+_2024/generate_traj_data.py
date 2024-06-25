@@ -32,7 +32,7 @@ from simulate_rcvr import PROJECT_PATH, CONFIG_FILE, DATA_PATH, RESULTS_PATH
 def generate_config(yml: dict):
     # generate navsim configurations
     t = TimeConfiguration(
-        duration=yml["time"]["duration"],
+        duration=0,
         fsim=yml["time"]["fsim"],
         year=yml["date"]["year"],
         month=yml["date"]["month"],
@@ -90,20 +90,21 @@ def save_chunk(x):
 
 def generate_trajectory(scenario: str, conf: SimulationConfiguration, yml: dict):
     nt.io.ensure_exist(RESULTS_PATH / "truth_data")
-    dump_filename = RESULTS_PATH / "truth_data" / f"{scenario}2.h5"
+    dump_filename = RESULTS_PATH / "truth_data" / f"{scenario}.h5"
     data_filename = DATA_PATH / f"{scenario}.csv"
-
-    # open simulators
-    ins_sim = INSSimulation(conf, use_config_fsim=True)
-    conf.time.duration = 2 / conf.time.fsim
-    meas_sim = MeasurementSimulation(conf, disable_progress=True)
+    print(f"Saving to {dump_filename}")
 
     # generate trajectory with ins simulator
+    ins_sim = INSSimulation(conf, use_config_fsim=True)
     ins_sim._INSSimulation__init_pva = np.genfromtxt(data_filename, delimiter=",", skip_header=1, max_rows=1)
     ins_sim._INSSimulation__motion_def = np.genfromtxt(data_filename, delimiter=",", skip_header=3)
     ins_sim.simulate()
+    print(ins_sim.time.shape)
+    # conf.time.duration = ins_sim.time[-1]
 
     # generate satellite data with meas sim
+    conf.time.duration = 2 / conf.time.fsim
+    meas_sim = MeasurementSimulation(conf, disable_progress=True)
     meas_sim.generate_truth(ins_sim.ecef_position[:1, :], ins_sim.ecef_velocity[:1, :])
     meas_sim.simulate()
 
@@ -113,7 +114,7 @@ def generate_trajectory(scenario: str, conf: SimulationConfiguration, yml: dict)
         opts = {}
         n = ins_sim.geodetic_position.shape[0]
         m = len(meas_sim.emitter_states.truth[0])
-        p = 4090
+        p = 5000
         q = int(n / p)
         dt = f"S{len(list(meas_sim.emitter_states.truth[0].keys())[0])}"
         k0 = list(meas_sim.emitter_states.truth[0].keys())[0]
@@ -172,7 +173,8 @@ if __name__ == "__main__":
     yp = YamlParser(CONFIG_FILE)
     yml = yp.Yaml2Dict()
     conf = generate_config(yml)
-    generate_trajectory("imu_devall_drive", conf, yml)
+    # generate_trajectory("static", conf, yml)
+    generate_trajectory("dynamic", conf, yml)
     toc(t0, "[\u001b[31;1mcharlizard\u001b[0m] done! ", use_logger=False)
 
     # dump_filename = RESULTS_PATH / "truth_data" / "test.h5"
