@@ -25,6 +25,7 @@ PI_SQUARED = np.pi * np.pi
 
 
 # * === dll_nceml_normalized ===
+@njit(cache=True, fastmath=True)
 def dll_nceml_normalized(IE: float, QE: float, IL: float, QL: float) -> float:
     E = IE * IE + QE * QE
     L = IL * IL + QL * QL
@@ -32,11 +33,13 @@ def dll_nceml_normalized(IE: float, QE: float, IL: float, QL: float) -> float:
 
 
 # * === dll_cdp_normalized ===
+@njit(cache=True, fastmath=True)
 def dll_cdp_normalized(IE: float, IP: float, IL: float) -> float:
     return 0.25 * (IE - IL) / IP  # chips
 
 
 # * === fll_atan2_normalized ===
+@njit(cache=True, fastmath=True)
 def fll_atan2_normalized(ip1: float, ip2: float, qp1: float, qp2: float, T: float) -> float:
     x = ip1 * qp2 - ip2 * qp1
     d = ip1 * ip2 + qp1 * qp2
@@ -44,6 +47,7 @@ def fll_atan2_normalized(ip1: float, ip2: float, qp1: float, qp2: float, T: floa
 
 
 # * === fll_ddcp_normalized ===
+@njit(cache=True, fastmath=True)
 def fll_ddcp_normalized(ip1: float, ip2: float, qp1: float, qp2: float, T: float) -> float:
     IP = ip1 + ip2
     QP = qp1 + qp2
@@ -53,16 +57,19 @@ def fll_ddcp_normalized(ip1: float, ip2: float, qp1: float, qp2: float, T: float
 
 
 # * === pll_atan_normalized ===
+@njit(cache=True, fastmath=True)
 def pll_atan_normalized(IP: float, QP: float) -> float:
-    return np.arctan(QP / IP) / TWO_PI  # cycles
+    return np.arctan2(QP, IP) / TWO_PI  # cycles
 
 
 # * === pll_ddq_normalized ===
+@njit(cache=True, fastmath=True)
 def pll_ddq_normalized(IP: float, QP: float) -> float:
     return QP * np.sign(IP) / (TWO_PI * np.sqrt(IP * IP + QP * QP))
 
 
 # * === dll_variance ===
+@njit(cache=True, fastmath=True)
 def dll_variance(CN0: float, T: float, D: float) -> float:
     tmp = 1.0 / (CN0 * T)
     return 0.25 * D * tmp * (1.0 + tmp)
@@ -70,12 +77,14 @@ def dll_variance(CN0: float, T: float, D: float) -> float:
 
 
 # * === fll_variance ===
+@njit(cache=True, fastmath=True)
 def fll_variance(CN0: float, T: float) -> float:
     tmp = 1.0 / (CN0 * T)
     return 0.5 * tmp / (PI_SQUARED * T * T) * (1.0 + tmp)
 
 
 # * === pll_variance ===
+@njit(cache=True, fastmath=True)
 def pll_variance(CN0: float, T: float) -> float:
     tmp = 0.5 / (CN0 * T)
     return tmp * (1.0 + tmp)

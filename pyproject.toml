@@ -8,24 +8,25 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.13"
-numpy = "^1.26.3"
-scipy = "^1.12.0"
-numba = "^0.58.1"
-pandas = "^2.1.1"
-matplotlib = "^3.8.2"
-seaborn = "^0.13.2"
-navtools = {path = "libs/navtools", develop = true}
-log-utils = {path = "libs/log_utils", develop = true}
-yaml-parser = {path = "libs/yaml_parser", develop = true}
-laika = {path = "libs/laika", develop = true}
-navsim = {path = "libs/navsim", develop = true}
-sympy = "^1.12"
 basemap = "^1.4.1"
-scikit-learn = "^1.4.1.post1"
-h5py = "^3.11.0"
-plotly = "^5.22.0"
-planar = {git = "git@github.com:chalk-diagrams/planar.git"}
+chalk-planar = { git = "git@github.com:chalk-diagrams/planar.git" }
 cartopy = "^0.23.0"
+h5py = "^3.11.0"
+laika = { path = "libs/laika", develop = true }
+logutils = { path = "libs/logutils", develop = true }
+matplotlib = "^3.8.2"
+navsim = { path = "libs/navsim", develop = true }
+navtools = { path = "libs/navtools", develop = true }
+numpy = "^1.26.4"
+numba = "^0.58.1"
+openpyxl = "^3.1.4"
+pandas = "^2.1.1"
+plotly = "^5.22.0"
+seaborn = "^0.13.2"
+scipy = "^1.12.0"
+sympy = "^1.12"
+yamlparser = { path = "libs/yamlparser", develop = true }
+gdal = "^3.9.0"
 
 [tool.poetry.group.dev.dependencies]
 snakeviz = "^2.2.0"

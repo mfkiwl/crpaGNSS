@@ -24,10 +24,9 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.ticker import MaxNLocator
 
-PROJECT_PATH = Path(__file__).parents[2]
-RESULTS_PATH = PROJECT_PATH / "results" / "mtt"
+from phd_filter_sim import PROJECT_PATH, RESULTS_PATH, SCENARIO, N_RUNS
+
 FIGURES_PATH = RESULTS_PATH / "figures"
-SCENARIO = ["multi_emitter_dynamic", "multi_emitter_static"]
 COLORS = [
     "#100c08",
     "#324ab2",
@@ -37,7 +36,6 @@ COLORS = [
     "#a2e3b8",
     "#c8c8c8",
 ]  # black, blue, orange-gold, red, olive, mint, gray
-N_RUNS = 100
 SAVE = True
 bold_font = {"fontweight": "bold", "fontsize": 20}
 
@@ -118,9 +116,13 @@ def plot_2d_position(data: dict, scenario: str, save: bool):
     for i in range(data["x_est"].size):
         if data["x_est"][i].size > 0:
             if i == 0:
-                ax.scatter(data["x_est"][i][0, :], data["x_est"][i][1, :], s=30, color=COLORS[5], marker="o", label="Estimate")
+                ax.scatter(
+                    data["x_est"][i][0, :], data["x_est"][i][1, :], s=30, color=COLORS[5], marker="o", label="Estimate"
+                )
             else:
-                ax.scatter(data["x_est"][i][0, :], data["x_est"][i][1, :], s=30, color=COLORS[5], marker="o", label="_nolabel_")
+                ax.scatter(
+                    data["x_est"][i][0, :], data["x_est"][i][1, :], s=30, color=COLORS[5], marker="o", label="_nolabel_"
+                )
 
     # plot emitter paths
     for i in range(data["t_birth"].size):
@@ -184,8 +186,12 @@ def plot_position_vs_time(data: dict, scenario: str, save: bool):
             sns.lineplot(x=t, y=x, ax=ax[0], color=COLORS[1], linewidth=3, label="Truth", estimator=None, sort=False)
             sns.lineplot(x=t, y=y, ax=ax[1], color=COLORS[1], linewidth=3, label="Truth", estimator=None, sort=False)
         else:
-            sns.lineplot(x=t, y=x, ax=ax[0], color=COLORS[1], linewidth=3, label="_nolegend_", estimator=None, sort=False)
-            sns.lineplot(x=t, y=y, ax=ax[1], color=COLORS[1], linewidth=3, label="_nolegend_", estimator=None, sort=False)
+            sns.lineplot(
+                x=t, y=x, ax=ax[0], color=COLORS[1], linewidth=3, label="_nolegend_", estimator=None, sort=False
+            )
+            sns.lineplot(
+                x=t, y=y, ax=ax[1], color=COLORS[1], linewidth=3, label="_nolegend_", estimator=None, sort=False
+            )
 
     handles, labels = ax[0].get_legend_handles_labels()
     order = [1, 0]
@@ -236,8 +242,12 @@ def plot_velocity_vs_time(data: dict, scenario: str, save: bool):
             sns.lineplot(x=t, y=x, ax=ax[0], color=COLORS[1], linewidth=3, label="Truth", estimator=None, sort=False)
             sns.lineplot(x=t, y=y, ax=ax[1], color=COLORS[1], linewidth=3, label="Truth", estimator=None, sort=False)
         else:
-            sns.lineplot(x=t, y=x, ax=ax[0], color=COLORS[1], linewidth=3, label="_nolegend_", estimator=None, sort=False)
-            sns.lineplot(x=t, y=y, ax=ax[1], color=COLORS[1], linewidth=3, label="_nolegend_", estimator=None, sort=False)
+            sns.lineplot(
+                x=t, y=x, ax=ax[0], color=COLORS[1], linewidth=3, label="_nolegend_", estimator=None, sort=False
+            )
+            sns.lineplot(
+                x=t, y=y, ax=ax[1], color=COLORS[1], linewidth=3, label="_nolegend_", estimator=None, sort=False
+            )
 
     handles, labels = ax[0].get_legend_handles_labels()
     order = [1, 0]
@@ -261,7 +271,9 @@ def plot_velocity_vs_time(data: dict, scenario: str, save: bool):
 def plot_cardinality_vs_time(data: dict, scenario: str, save: bool):
     f, ax = plt.subplots(**{"figsize": (8, 5)})
     sns.lineplot(x=data["time"], y=data["n_true"], ax=ax, color=COLORS[1], linewidth=3, label="Truth")
-    sns.scatterplot(x=data["time"], y=data["n_est"], ax=ax, s=50, color=COLORS[5], marker="o", edgecolor=None, label="Estimate")
+    sns.scatterplot(
+        x=data["time"], y=data["n_est"], ax=ax, s=50, color=COLORS[5], marker="o", edgecolor=None, label="Estimate"
+    )
 
     ax.set_title(f"Cardinality vs. Time", **bold_font)
     ax.grid(visible=True, which="both", axis="both")
@@ -282,7 +294,7 @@ def plot_all_meas_vs_time(data: dict, scenario: str, save: bool):
         if i == 0:
             sns.scatterplot(
                 x=t,
-                y=data["y_meas"][i].ravel(),
+                y=np.rad2deg(data["y_meas"][i].ravel()),
                 ax=ax,
                 s=20,
                 color=COLORS[5],
@@ -294,7 +306,7 @@ def plot_all_meas_vs_time(data: dict, scenario: str, save: bool):
         else:
             sns.scatterplot(
                 x=t,
-                y=data["y_meas"][i].ravel(),
+                y=np.rad2deg(data["y_meas"][i].ravel()),
                 ax=ax,
                 s=20,
                 color=COLORS[5],
@@ -323,12 +335,29 @@ def plot_all_meas_vs_time(data: dict, scenario: str, save: bool):
                 y4.append(data["y_true"][j][3, i])
         t = data["time"][data["t_birth"][i] : data["t_death"][i]]
         if i == 0:
-            sns.lineplot(x=t, y=y1, ax=ax, color=COLORS[1], linewidth=3, label="Truth", estimator=None, sort=False)
+            sns.lineplot(
+                x=t, y=np.rad2deg(y1), ax=ax, color=COLORS[1], linewidth=3, label="Truth", estimator=None, sort=False
+            )
         else:
-            sns.lineplot(x=t, y=y1, ax=ax, color=COLORS[1], linewidth=3, label="_nolegend_", estimator=None, sort=False)
-        sns.lineplot(x=t, y=y2, ax=ax, color=COLORS[1], linewidth=3, label="_nolegend_", estimator=None, sort=False)
-        sns.lineplot(x=t, y=y3, ax=ax, color=COLORS[1], linewidth=3, label="_nolegend_", estimator=None, sort=False)
-        sns.lineplot(x=t, y=y4, ax=ax, color=COLORS[1], linewidth=3, label="_nolegend_", estimator=None, sort=False)
+            sns.lineplot(
+                x=t,
+                y=np.rad2deg(y1),
+                ax=ax,
+                color=COLORS[1],
+                linewidth=3,
+                label="_nolegend_",
+                estimator=None,
+                sort=False,
+            )
+        sns.lineplot(
+            x=t, y=np.rad2deg(y2), ax=ax, color=COLORS[1], linewidth=3, label="_nolegend_", estimator=None, sort=False
+        )
+        sns.lineplot(
+            x=t, y=np.rad2deg(y3), ax=ax, color=COLORS[1], linewidth=3, label="_nolegend_", estimator=None, sort=False
+        )
+        sns.lineplot(
+            x=t, y=np.rad2deg(y4), ax=ax, color=COLORS[1], linewidth=3, label="_nolegend_", estimator=None, sort=False
+        )
 
     ax.set_title(f"Measurements and True Measurements", **bold_font)
     ax.grid(visible=True, which="both", axis="both")
@@ -371,17 +400,31 @@ def plot_mc_results(scenario: str, save: bool):
             label="_nolegend_",
         )
     sns.lineplot(x=data["time"], y=data["mean_x"], ax=ax[0], color=COLORS[0], linewidth=3, label="MC μ")
-    sns.lineplot(x=data["time"], y=data["mean_x"] + 3 * data["mc_std_x"], ax=ax[0], color=COLORS[1], linewidth=3, label="MC 3σ")
     sns.lineplot(
-        x=data["time"], y=data["mean_x"] - 3 * data["mc_std_x"], ax=ax[0], color=COLORS[1], linewidth=3, label="_nolabel_"
+        x=data["time"], y=data["mean_x"] + 3 * data["mc_std_x"], ax=ax[0], color=COLORS[1], linewidth=3, label="MC 3σ"
+    )
+    sns.lineplot(
+        x=data["time"],
+        y=data["mean_x"] - 3 * data["mc_std_x"],
+        ax=ax[0],
+        color=COLORS[1],
+        linewidth=3,
+        label="_nolabel_",
     )
     sns.lineplot(x=data["time"], y=3 * data["an_std_x"], ax=ax[0], color=COLORS[3], linewidth=3, label="Analytical 3σ")
     sns.lineplot(x=data["time"], y=-3 * data["an_std_x"], ax=ax[0], color=COLORS[3], linewidth=3, label="_nolabel_")
 
     sns.lineplot(x=data["time"], y=data["mean_y"], ax=ax[1], color=COLORS[0], linewidth=3, label="MC μ")
-    sns.lineplot(x=data["time"], y=data["mean_y"] + 3 * data["mc_std_y"], ax=ax[1], color=COLORS[1], linewidth=3, label="MC 3σ")
     sns.lineplot(
-        x=data["time"], y=data["mean_y"] - 3 * data["mc_std_y"], ax=ax[1], color=COLORS[1], linewidth=3, label="_nolabel_"
+        x=data["time"], y=data["mean_y"] + 3 * data["mc_std_y"], ax=ax[1], color=COLORS[1], linewidth=3, label="MC 3σ"
+    )
+    sns.lineplot(
+        x=data["time"],
+        y=data["mean_y"] - 3 * data["mc_std_y"],
+        ax=ax[1],
+        color=COLORS[1],
+        linewidth=3,
+        label="_nolabel_",
     )
     sns.lineplot(x=data["time"], y=3 * data["an_std_y"], ax=ax[1], color=COLORS[3], linewidth=3, label="Analytical 3σ")
     sns.lineplot(x=data["time"], y=-3 * data["an_std_y"], ax=ax[1], color=COLORS[3], linewidth=3, label="_nolabel_")

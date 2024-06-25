@@ -20,29 +20,26 @@ import numpy as np
 from scipy.linalg import norm, inv, cholesky, block_diag, det
 from scipy.stats.distributions import chi2
 from dataclasses import dataclass
+from typing import Callable
 import navtools as nt
-
-from charlizard.utils.combinations import combinations
 
 TWO_PI = 2.0 * np.pi
 R2D = 180 / np.pi
 LIGHT_SPEED = 299792458.0
+I2 = np.eye(2)
 
 
 @dataclass
 class PHDFilterConfig:
     T: float  #! integration period [s]
     order: int  #! 2: constant velocity, 3: constant acceleration
-    vel_std: float  #! velocity process noise standard deviation [m/s]
-    acc_std: float  #! acceleration process noise standard deviation [m/s^2]
-    aoa_std: float  #! angle of arrival measurement noise standard deviation [deg]
-    tdoa_std: float  #! time difference of arrival measurement noise standard deviation [ns]
-    aoa_clutter: int  #! Poisson average rate of uniform clutter for AOA
-    tdoa_clutter: int  #! Poisson average rate of uniform clutter for TDOA
-    aoa_clutter_range: np.ndarray  #! uniform range for AOA clutter values [rad]
-    tdoa_clutter_range: np.ndarray  #! uniform range for TDOA clutter values [m]
-    aoa_update_rate: int  #! time between aoa measurement updates [s]
-    tdoa_update_rate: int  #! time between aoa measurement updates [s]
+    process_noise_std: float  #! process noise standard deviation
+    meas_model: Callable[
+        [int, np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray, np.ndarray]
+    ]  #! function that returns meas/covariance and Jacobian matrix
+    meas_clutter: int  #! Poisson average rate of uniform clutter
+    meas_clutter_range: np.ndarray  #! uniform range for clutter values
+    spawn_update_rate: float  #! number of integration periods between random spawns
     p_d: float  #! probability of detection
     p_s: float  #! probability of survival
     prune_threshold: float
@@ -86,15 +83,14 @@ class PHDFilter:
     def __init__(self, conf: PHDFilterConfig):
         # initialize filter
         self.T = conf.T
-        self.aoa_std = conf.aoa_std / R2D
-        self.tdoa_std = conf.tdoa_std * 1e-9 * LIGHT_SPEED
         self.p_d = conf.p_d
         self.p_s = conf.p_s
-        self.aoa_update_rate = conf.aoa_update_rate
-        self.tdoa_update_rate = conf.tdoa_update_rate
         self.prune_threshold = conf.prune_threshold
         self.merge_threshold = conf.merge_threshold
         self.cap_threshold = conf.cap_threshold
+
+        self.spawn_update_rate = conf.spawn_update_rate
+        self.__meas_model = conf.meas_model
 
         # initialize clutter
         self.__init_clutter_param(conf)
@@ -125,16 +121,13 @@ class PHDFilter:
                 for j in range(detect.size):
                     if detect[j]:
                         # create true measurements
-                        # if (i % self.tdoa_update_rate) == 0:  # tdoa is less frequent
-                        #     if self.Truth.emit_pos[i].size > 2:
-                        #         y, H, R, R_sqrt = self.__aoa_rdoa_model(self.Truth.emit_pos[i][j, :], self.Truth.rcvr_pos[i])
-                        #     else:
-                        #         y, H, R, R_sqrt = self.__aoa_rdoa_model(self.Truth.emit_pos[i], self.Truth.rcvr_pos[i])
-                        # else:
                         if self.Truth.emit_pos[i].size > 2:
-                            y, H, R, R_sqrt = self.__aoa_model(self.Truth.emit_pos[i][j, :], self.Truth.rcvr_pos[i])
+                            y, H, R = self.__meas_model(
+                                self.order, self.Truth.emit_pos[i][j, :], self.Truth.rcvr_pos[i]
+                            )
                         else:
-                            y, H, R, R_sqrt = self.__aoa_model(self.Truth.emit_pos[i], self.Truth.rcvr_pos[i])
+                            y, H, R = self.__meas_model(self.order, self.Truth.emit_pos[i], self.Truth.rcvr_pos[i])
+                        R_sqrt = np.sqrt(R)
 
                         # add true measurements
                         if j == 0:
@@ -147,25 +140,14 @@ class PHDFilter:
                             self.Y_true[i] = np.concatenate((self.Y_true[i], np.array([y]).reshape(y.size, 1)), axis=1)
 
             # determine number of clutter measurements
-            # if (i % self.tdoa_update_rate) == 0:  # tdoa is less frequent
-            #     N_clutter = np.random.poisson(self.lambda_comb)
-            #     c0, _ = combinations(np.arange(self.Truth.N_rcvr))
-            #     aoa_clutter = self.aoa_clutter_range * np.random.rand(self.Truth.N_rcvr, N_clutter) - self.aoa_clutter_range / 2
-            #     tdoa_clutter = self.tdoa_clutter_range * np.random.rand(c0.size, N_clutter) - self.tdoa_clutter_range / 2
-            #     y_clutter = np.vstack((aoa_clutter, tdoa_clutter))
-            #     self.Y_type[i] = "comb"
-            # else:
-            N_clutter = np.random.poisson(self.lambda_aoa)
-            y_clutter = nt.wrapTo2Pi(self.aoa_clutter_range * np.random.randn(self.Truth.N_rcvr, N_clutter))
+            N_clutter = np.random.poisson(self.lambda_meas)
+            y_clutter = nt.wrapTo2Pi(self.meas_clutter_range * np.random.randn(self.Truth.N_rcvr, N_clutter))
 
             # add clutter measurements
             if len(self.Y[i]) > 0:
                 self.Y[i] = np.concatenate((self.Y[i], y_clutter), axis=1)
             else:
                 self.Y[i] = y_clutter
-
-            # self.Y[i] = nt.wrapToPi(self.Y[i])
-            # self.Y_true[i] = nt.wrapToPi(self.Y_true[i])
 
     # * ##### run_filter ###############################################################################################
     def run_filter(self, init_states, init_cov, init_weights):
@@ -189,38 +171,36 @@ class PHDFilter:
         for i in range(self.Truth.N_time):
 
             # TODO: FIX BIRTHS TO NOT BE EXACT FROM TRUTH
-            # --- births ---
-            w_birth = np.empty(0)
-            x_birth = np.empty(0)
-            P_birth = np.empty(0)
-            if (i % self.tdoa_update_rate) == 0:  # assuming other algorithm runs when tdoa is updated
-                w_birth = 0.2 * np.ones(self.Truth.N_emit[i])
-                P_birth = np.tile(np.array([self.default_P]).transpose(1, 2, 0), (1, 1, self.Truth.N_emit[i]))
+            # --- spawns ---
+            w_spawn = np.empty(0)
+            x_spawn = np.empty(0)
+            P_spawn = np.empty(0)
+            if (i % self.spawn_update_rate) == 0:  # assuming other algorithm runs when tdoa is updated
+                w_spawn = 0.25 * np.ones(self.Truth.N_emit[i])
+                P_spawn = np.tile(np.array([self.default_P]).transpose(1, 2, 0), (1, 1, self.Truth.N_emit[i]))
                 if self.order == 2:
-                    x_birth = np.hstack((self.Truth.emit_pos[i], self.Truth.emit_vel[i])).T
+                    x_spawn = np.hstack((self.Truth.emit_pos[i], self.Truth.emit_vel[i])).T
                 elif self.order == 3:
-                    x_birth = np.hstack(
+                    x_spawn = np.hstack(
                         (self.Truth.emit_pos[i], self.Truth.emit_vel[i], np.zeros(self.Truth.emit_vel[i].shape))
                     ).T
-                if self.Truth.N_emit[i] == 1:
-                    x_birth = np.array([x_birth]).T
+                if len(x_spawn.shape) < 2:
+                    x_spawn = np.array([x_spawn]).T
 
-            # --- spawns ---
+            # --- births ---
             # basing off covariance for now
-            # N_spawns = 2
-            # for j in range(w_update.size):
-            #     if j == 0:
-            #         w_spawn = 0.1 * np.ones(N_spawns)
-            #         x_spawn = x_update[:, j][:, None] + P_update[:, :, j] @ np.random.randn(N_states, N_spawns)
-            #         P_spawn = np.tile(np.array([P_update[:, :, j]]).transpose(1, 2, 0), (1, 1, N_spawns))
-            #     else:
-            #         w_spawn = np.concatenate((w_spawn, 0.1 * np.ones(N_spawns)))
-            #         x_spawn = np.concatenate(
-            #             (x_spawn, x_update[:, j][:, None] + P_update[:, :, j] @ np.random.randn(N_states, N_spawns)), axis=1
+            # w_birth = np.zeros(2 * w_update.size)
+            # x_birth = np.zeros((x_update.shape[0], 2 * x_update.shape[1]))
+            # P_birth = np.zeros((P_update.shape[0], P_update.shape[1], 2 * P_update.shape[2]))
+            # k = 0
+            # for j in range(x_update.shape[1]):
+            #     for _ in range(2):
+            #         w_birth[k] = 0.01
+            #         x_birth[:, k] = x_update[:, j] + 3.0 * cholesky(P_update[:, :, j]) @ np.random.randn(
+            #             x_update.shape[0]
             #         )
-            #         P_spawn = np.concatenate(
-            #             (P_spawn, np.tile(np.array([P_update[:, :, j]]).transpose(1, 2, 0), (1, 1, N_spawns))), axis=2
-            #         )
+            #         P_birth[:, :, k] = P_update[:, :, j]
+            #         k += 1
 
             # --- prediction for surviving targets ---
             x_predict = np.zeros((N_states, J_k))
@@ -231,13 +211,14 @@ class PHDFilter:
                 P_predict[:, :, j] = self.A @ P_update[:, :, j] @ self.A.T + self.Q
 
             # --- union of births, spawns, and predictions ---
-            # w_predict = np.concatenate((w_spawn, w_predict), axis=0)
-            # x_predict = np.concatenate((x_spawn, x_predict), axis=1)
-            # P_predict = np.concatenate((P_spawn, P_predict), axis=2)
-            if w_birth.size > 0:
-                w_predict = np.concatenate((w_birth, w_predict), axis=0)
-                x_predict = np.concatenate((x_birth, x_predict), axis=1)
-                P_predict = np.concatenate((P_birth, P_predict), axis=2)
+            if w_spawn.size > 0:
+                w_predict = np.concatenate((w_spawn, w_predict), axis=0)
+                x_predict = np.concatenate((x_spawn, x_predict), axis=1)
+                P_predict = np.concatenate((P_spawn, P_predict), axis=2)
+            # if w_birth.size > 0:
+            #     w_predict = np.concatenate((w_birth, w_predict), axis=0)
+            #     x_predict = np.concatenate((x_birth, x_predict), axis=1)
+            #     P_predict = np.concatenate((P_birth, P_predict), axis=2)
             J_k = w_predict.size
 
             # --- chi^2 test (removes most faulty measurements) ---
@@ -256,10 +237,7 @@ class PHDFilter:
             w_update = (1.0 - self.p_d) * w_predict
             for j in range(J_k):
                 # get measurements and observation matrix
-                # if (i % self.tdoa_update_rate) == 0:  # tdoa is less frequent
-                #     y, H, R, _ = self.__aoa_rdoa_model(x_predict[:2, j], self.Truth.rcvr_pos[i])
-                # else:
-                y, H, R, _ = self.__aoa_model(x_predict[:2, j], self.Truth.rcvr_pos[i])
+                y, H, R = self.__meas_model(self.order, x_predict[:2, j], self.Truth.rcvr_pos[i])
 
                 # innovation covariance
                 dy = Y - np.tile(y[:, None], (1, y_len))
@@ -270,7 +248,9 @@ class PHDFilter:
                 dy_sq = np.squeeze(dy)
                 det_S = det(S)
                 if len(dy_sq.shape) > 1:
-                    pdf_n[j, :] = (np.exp(-0.5 * dy_sq.T @ inv_S @ dy_sq) / np.sqrt(TWO_PI ** (n_meas / 2) * det_S)).diagonal()
+                    pdf_n[j, :] = (
+                        np.exp(-0.5 * dy_sq.T @ inv_S @ dy_sq) / np.sqrt(TWO_PI ** (n_meas / 2) * det_S)
+                    ).diagonal()
                 else:
                     pdf_n[j, :] = np.exp(-0.5 * dy_sq.T @ inv_S @ dy_sq) / np.sqrt(TWO_PI ** (n_meas / 2) * det_S)
 
@@ -282,10 +262,7 @@ class PHDFilter:
             # --- combine measurement updates ---
             for k in range(y_len):
                 w_tmp = self.p_d * w_predict * pdf_n[:, k]
-                # if (i % self.tdoa_update_rate) == 0:  # tdoa is less frequent
-                #     w_tmp /= self.k_comb + np.sum(w_tmp)
-                # else:
-                w_tmp /= self.k_aoa + np.sum(w_tmp)
+                w_tmp /= self.k_meas + np.sum(w_tmp)
                 w_update = np.concatenate((w_update, w_tmp), axis=0)
                 x_update = np.concatenate((x_update, m_tmp[:, :, k]), axis=1)
                 P_update = np.concatenate((P_update, P_tmp), axis=2)
@@ -330,22 +307,31 @@ class PHDFilter:
                 self.Est.w[i] = np.empty(0)
 
             # --- figure out error ---
-            if self.Truth.emit_pos[i].size > 2:
-                for j in range(min([self.Truth.emit_pos[i].shape[0], self.Est.x[i][:2, :].T.shape[0]])):
-                    error = self.Truth.emit_pos[i][j, :] - self.Est.x[i][:2, :].T
-                    idx1 = np.abs(error).argmin(axis=0)
-                    idx2 = np.arange(2)
-                    if j == 0:
-                        self.Est.x_err[i] = np.array([error[idx1, idx2]])
-                    else:
-                        self.Est.x_err[i] = np.vstack((self.Est.x_err[i], error[idx1, idx2]))
+            if self.Est.x[i].size == 0:
+                self.Est.x_err[i] = self.Truth.emit_pos[i]
             else:
-                error = self.Truth.emit_pos[i] - self.Est.x[i][:2, :].T
-                # idx1 = np.abs(error).argmin(axis=0)
-                # idx2 = np.arange(2)
-                # self.Est.x_err[i] = np.array([error[idx1, idx2]])
-                self.Est.x_err[i] = error
-                # self.Est.x_err[i] = np.array([error])
+                if len(self.Est.x[i].shape) < 2:
+                    est = self.Est.x[i][:2]
+                else:
+                    est = self.Est.x[i][:2, :].T
+
+                if self.Truth.emit_pos[i].size > 2:
+                    for j in range(min([self.Truth.emit_pos[i].shape[0], est.shape[0]])):
+                        error = self.Truth.emit_pos[i][j, :] - est
+                        idx1 = np.abs(error).argmin(axis=0)
+                        idx2 = np.arange(2)
+                        if j == 0:
+                            self.Est.x_err[i] = np.array([error[idx1, idx2]])
+                        else:
+                            self.Est.x_err[i] = np.vstack((self.Est.x_err[i], error[idx1, idx2]))
+                else:
+                    if len(self.Est.x[i].shape) < 2:
+                        self.Est.x_err[i] = self.Truth.emit_pos[i] - est
+                    else:
+                        error = self.Truth.emit_pos[i] - est
+                        idx1 = np.abs(error).argmin(axis=0)
+                        idx2 = np.arange(2)
+                        self.Est.x_err[i] = np.array([error[idx1, idx2]])
 
             # print()
 
@@ -353,116 +339,64 @@ class PHDFilter:
 
     # * ##### init_clutter_param #####
     def __init_clutter_param(self, conf: PHDFilterConfig):
-        # aoa clutter statistics
-        self.lambda_aoa = conf.aoa_clutter  #! Poisson average rate of clutter
-        self.aoa_clutter_range = conf.aoa_clutter_range[1] - conf.aoa_clutter_range[0]  #! uniform clutter
-        self.k_aoa = self.lambda_aoa / self.aoa_clutter_range  #! uniform clutter density
-
-        # tdoa clutter statistics
-        self.lambda_tdoa = conf.tdoa_clutter
-        self.tdoa_clutter_range = conf.tdoa_clutter_range[1] - conf.tdoa_clutter_range[0]
-        self.k_tdoa = self.lambda_tdoa / self.tdoa_clutter_range
-
-        # combined
-        self.lambda_comb = conf.aoa_clutter + conf.tdoa_clutter
-        self.k_comb = self.k_aoa * self.k_tdoa  #! combined clutter density
+        # meas clutter statistics
+        self.lambda_meas = conf.meas_clutter  #! Poisson average rate of clutter
+        self.meas_clutter_range = conf.meas_clutter_range[1] - conf.meas_clutter_range[0]  #! uniform clutter
+        self.k_meas = self.lambda_meas / self.meas_clutter_range  #! uniform clutter density
 
     # * ##### init_process_model #####
     def __init_process_model(self, conf: PHDFilterConfig):
         self.order = conf.order
-        if conf.order == 2:
-            t = self.T
-            q = conf.vel_std
-            self.A = np.array([[1.0, 0.0, t, 0.0], [0.0, 1.0, 0.0, t], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]])
-            self.Q = np.array(
+        T = self.T
+        if conf.order == 2:  #! constant velocity
+            self.A = np.array([[1.0, 0.0, T, 0.0], [0.0, 1.0, 0.0, T], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]])
+            xyz_pp = conf.process_noise_std**2 * T**3 * I2 / 3
+            xyz_vv = conf.process_noise_std**2 * T * I2
+            xyz_pv = conf.process_noise_std**2 * T**2 * I2 / 3
+            self.Q = np.block(
                 [
-                    [(q * t**3) / 3, 0.0, (q * t**2) / 2, 0.0],
-                    [0.0, (q * t**3) / 3, 0.0, (q * t**2) / 2],
-                    [(q * t**2) / 2, 0.0, q * t, 0.0],
-                    [0.0, (q * t**2) / 2, 0.0, q * t],
+                    [xyz_pp, xyz_pv],
+                    [xyz_pv, xyz_vv],
                 ]
             )
             self.I = np.eye(4)
             # self.default_P = np.diag([50.0, 50.0, 5.0, 5.0]) ** 2
             self.default_P = np.diag([25.0, 25.0, 1.0, 1.0]) ** 2
-        elif conf.order == 3:
-            t = self.T
-            qv = conf.vel_std
-            qa = conf.acc_std
+        elif conf.order == 3:  #! constant acceleration
             self.A = np.array(
                 [
-                    [1.0, 0.0, t, 0.0, 0.5 * t**2, 0.0],
-                    [0.0, 1.0, 0.0, t, 0.0, 0.5 * t**2],
-                    [0.0, 0.0, 1.0, 0.0, t, 0.0],
-                    [0.0, 0.0, 0.0, 1.0, 0.0, t],
+                    [1.0, 0.0, T, 0.0, 0.5 * T**2, 0.0],
+                    [0.0, 1.0, 0.0, T, 0.0, 0.5 * T**2],
+                    [0.0, 0.0, 1.0, 0.0, T, 0.0],
+                    [0.0, 0.0, 0.0, 1.0, 0.0, T],
                     [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
                     [0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
                 ]
             )
-            self.Q = np.array(
+
+            xyz_pp = conf.process_noise_std**2 * T**5 / 20 * I2
+            xyz_vv = conf.process_noise_std**2 * T**3 / 3 * I2
+            xyz_aa = conf.process_noise_std**2 * T * I2
+            xyz_pv = conf.process_noise_std**2 * T**4 / 8 * I2
+            xyz_pa = conf.process_noise_std**2 * T**3 / 6 * I2
+            xyz_va = conf.process_noise_std**2 * T**2 / 2 * I2
+            self.Q = np.block(
                 [
-                    [(qa * t**5) / 20 + (qv * t**3) / 3, 0.0, (qa * t**4) / 8 + (qv * t**2) / 2, 0.0, (qa * t**3) / 6, 0.0],
-                    [0.0, (qa * t**5) / 20 + (qv * t**3) / 3, 0.0, (qa * t**4) / 8 + (qv * t**2) / 2, 0.0, (qa * t**3) / 6],
-                    [(qa * t**4) / 8 + qv * (t**2) / 2, 0.0, (qa * t**3) / 3 + qv * t, 0.0, (qa * t**2) / 2, 0.0],
-                    [0.0, (qa * t**4) / 8 + qv * (t**2) / 2, 0.0, (qa * t**3) / 3 + qv * t, 0.0, (qa * t**2) / 2],
-                    [(qa * t**3) / 6, 0.0, (qa * t**2) / 2, 0.0, qa * t, 0.0],
-                    [0.0, (qa * t**3) / 6, 0.0, (qa * t**2) / 2, 0.0, qa * t],
+                    [xyz_pp, xyz_pv, xyz_pa],
+                    [xyz_pv, xyz_vv, xyz_va],
+                    [xyz_pa, xyz_va, xyz_aa],
                 ]
             )
             self.I = np.eye(6)
             # self.default_P = np.diag([50.0, 50.0, 5.0, 5.0, 1.0, 1.0]) ** 2
             self.default_P = np.diag([25.0, 25.0, 1.0, 1.0, 0.1, 0.1]) ** 2
 
-    def __aoa_model(self, x, rcvr_pos):
-        dE = x[0] - rcvr_pos[:, 0]
-        dN = x[1] - rcvr_pos[:, 1]
-        y = nt.wrapTo2Pi(np.arctan2(dE, dN))
-        r2 = dE**2 + dN**2
-
-        if self.order == 2:
-            Z = np.zeros((y.size, 2))
-        elif self.order == 3:
-            Z = np.zeros((y.size, 4))
-        H = np.column_stack((dN, -dE, Z)) / r2[:, None]
-        R = np.diag(self.aoa_std**2 * np.ones(y.size))
-        R_sqrt = np.diag(self.aoa_std * np.ones(y.size))
-        return y, H, R, R_sqrt
-
-    def __rdoa_model(self, x, rcvr_pos):
-        idx = np.arange(rcvr_pos.shape[0])
-        c0, c1 = combinations(idx)
-        dR = x - rcvr_pos
-        R = np.sqrt(dR[:, 0] ** 2 + dR[:, 1] ** 2)
-        y = R[c0] - R[c1]
-
-        if self.order == 2:
-            Z = np.zeros((y.size, 2))
-        elif self.order == 3:
-            Z = np.zeros((y.size, 4))
-        H = dR[c0, :] / R[c0, None] - dR[c1, :] / R[c1, None]
-        H = np.column_stack((H, Z))
-        R = np.diag(self.tdoa_std**2 * np.ones(y.size))
-        R_sqrt = np.diag(self.tdoa_std * np.ones(y.size))
-        return y, H, R, R_sqrt
-
-    def __aoa_rdoa_model(self, x, rcvr_pos):
-        y1, H1, R1, R1_sqrt = self.__aoa_model(x, rcvr_pos)
-        y2, H2, R2, R2_sqrt = self.__rdoa_model(x, rcvr_pos)
-        y = np.concatenate((y1, y2))
-        H = np.concatenate((H1, H2))
-        R = block_diag(R1, R2)
-        R_sqrt = block_diag(R1_sqrt, R2_sqrt)
-        return y, H, R, R_sqrt
-
     def __chi2_test(self, m_predict, P_predict, J_k, i):
         valid_idx = np.empty(0)
         z_len = self.Y[i].shape[1]
         gamma = chi2.ppf(0.997, df=z_len)  # 3 sigma bound
         for j in range(J_k):
-            # if (i % self.tdoa_update_rate) == 0:  # tdoa is less frequent
-            #     y, H, R, _ = self.__aoa_rdoa_model(m_predict[:2, j], self.Truth.rcvr_pos[i])
-            # else:
-            y, H, R, _ = self.__aoa_model(m_predict[:2, j], self.Truth.rcvr_pos[i])
+            y, H, R = self.__meas_model(self.order, m_predict[:2, j], self.Truth.rcvr_pos[i])
             S = H @ P_predict[:, :, j] @ H.T + R
             inv_sqrt_S = inv(cholesky(S))
             dy = self.Y[i] - np.tile(y[:, None], (1, z_len))
@@ -508,7 +442,9 @@ class PHDFilter:
                 P_tmp = np.array([P_sum / w_tmp[el]]).transpose(1, 2, 0)
             else:
                 w_tmp = np.append(w_tmp, np.sum(w_update[ij]))
-                m_tmp = np.concatenate((m_tmp, np.array([np.sum(w_update[ij] * m_update[:, ij], axis=1) / w_tmp[el]]).T), axis=1)
+                m_tmp = np.concatenate(
+                    (m_tmp, np.array([np.sum(w_update[ij] * m_update[:, ij], axis=1) / w_tmp[el]]).T), axis=1
+                )
                 P_sum = np.zeros((N_state, N_state))
                 for a in ij:
                     dm = m_tmp[:, el] - m_update[:, a]

@@ -1,14 +1,12 @@
 date:
   year: 2024
-  month: 5
+  month: 6
   day: 2
   hour: 12
   minute: 0
   second: 0
 
 time:
-  duration: 204.499
-  # duration: 4.999
   fsim: 1000 # [Hz]
   frcvr: 50 # [Hz]
   fimu: 100 # [Hz]
@@ -19,13 +17,20 @@ errors:
   rx_clock: high_quality_tcxo
 
 imu:
-  model: consumer
   osr: 1
   mobility: [3.0, 1.5, 6.0]
+  model: consumer
 
 constellations:
   mask_angle: 7.5 # [deg]
   emitters:
     gps:
       signal: gps
-      js: [0.0, 5.0, 10.0, 15.0, 20.0, 24.0, 26.0, 28.0, 30.0, 32.0, 34.0, 36.0, 40.0, 45.0]
+      
+mc_params:
+  scenarios: ["static", "dynamic", "static_w_crpa", "dynamic_w_crpa"]
+  attenuation: [0, 5, 10, 15, 20, 22.5, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 37.5, 40]
+  imu_models: ["consumer", "industrial", "tactical"]
+  n_ant: [1, 2, 3, 4]
+  n_runs: 100
+  init_pva_err_std: [3.0, 3.0, 5.0, 0.1, 0.1, 0.15, 3.0, 3.0, 10.0] # m, m/s, deg

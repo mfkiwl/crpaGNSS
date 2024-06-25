@@ -53,6 +53,7 @@ from numba import njit
 
 
 # * === cn0_m2m4_estimate ===
+@njit(cache=True, fastmath=True)
 def cn0_m2m4_estimate(IPs: np.ndarray, QPs: np.ndarray, T: float) -> float:
     # 2nd and 4th moments
     m2 = 0.0
@@ -72,7 +73,28 @@ def cn0_m2m4_estimate(IPs: np.ndarray, QPs: np.ndarray, T: float) -> float:
     return cn0_dB, cn0_pow
 
 
+@njit(cache=True, fastmath=True)
+def cn0_m2m4_estimate2d(IPs: np.ndarray, QPs: np.ndarray, T: float) -> float:
+    # 2nd and 4th moments
+    M = IPs.shape[0]
+    N = IPs.shape[1]
+    m2 = np.zeros(M)
+    m4 = np.zeros(M)
+    for ii in range(N):
+        tmp = IPs[:, ii] * IPs[:, ii] + QPs[:, ii] * QPs[:, ii]
+        m2 += tmp
+        m4 += tmp * tmp
+    m2 /= N
+    m4 /= N
+    Pd = np.sqrt(2.0 * m2 * m2 - m4)
+    Pn = m2 - Pd
+
+    cn0_pow = (Pd / Pn) / T
+    return cn0_pow
+
+
 # * === cn0_beaulieu_estimate ===
+@njit(cache=True, fastmath=True)
 def cn0_beaulieu_estimate(IPs: np.ndarray, prev_IPs: np.ndarray, T: float) -> float:
     Pd = 0.0
     Pn = 0.0
@@ -90,6 +112,7 @@ def cn0_beaulieu_estimate(IPs: np.ndarray, prev_IPs: np.ndarray, T: float) -> fl
 
 
 # * === carrier_lock_detector ===
+@njit(cache=True, fastmath=True)
 def carrier_lock_detector(IPs: np.ndarray, QPs: np.ndarray) -> float:
     I = 0.0
     Q = 0.0

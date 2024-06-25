@@ -35,3 +35,5 @@ venv.bak/
 
 # ignore binded files
 libs/
+_old/
+*.DS_Store

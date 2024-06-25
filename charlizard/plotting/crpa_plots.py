@@ -214,12 +214,17 @@ def polar_pattern_animation(
         ylim=[min([y_desired.min() - 0.5, y_mixed.min() - 0.5]), max([y_desired.max() + 0.5, y_mixed.max() + 0.5])],
     )
     ax2.set(
-        xlabel="Iteration Number", ylabel="Weights", xlim=[0, N_FRAMES], ylim=[weights.real.min() - 0.5, weights.real.max() + 0.5]
+        xlabel="Iteration Number",
+        ylabel="Weights",
+        xlim=[0, N_FRAMES],
+        ylim=[weights.real.min() - 0.5, weights.real.max() + 0.5],
     )
 
     # plot initial frame
     if plot_3d:
-        pp = ax0.scatter(pattern[0, :, 0], pattern[0, :, 1], s=5, c=gain[0, :], cmap="gnuplot", vmin=gain.min(), vmax=gain.max())
+        pp = ax0.scatter(
+            pattern[0, :, 0], pattern[0, :, 1], s=5, c=gain[0, :], cmap="gnuplot", vmin=gain.min(), vmax=gain.max()
+        )
         f.colorbar(pp, ax=ax0)
     else:
         pp = ax0.plot(az, pattern[0, :])[0]
@@ -278,3 +283,22 @@ def polar_pattern_animation(
     if save:
         nt.io.ensure_exist(FIGURES_PATH)
         ani.save(FIGURES_PATH / f"{filename}.gif")
+
+
+def music_2d_plot(ant_xyz, P_music_dB: np.ndarray, D: int, resolution: float):
+    az = np.arange(-180.0, 180.0, resolution)
+    az_idx = P_music_dB.argsort()[::-1]
+
+    f, ax = plt.subplots()
+    for i in range(D):
+        ax.vlines(x=az[az_idx[i]], ymin=0.0, ymax=P_music_dB[az_idx[i]], color="r", linestyle="--")
+        plt.text(az[az_idx[i]], P_music_dB[az_idx[i]], f"Peak {i+1}: {az[az_idx[i]]} deg", fontsize=14)
+    ax.plot(az, P_music_dB, "k", linewidth=2)
+    ax.set(
+        xlabel="Azimuth [deg]",
+        ylabel="Power [dB]",
+        title="2D MUSIC Power Plot",
+        xticks=np.arange(-180, 180 + 45, 45),
+    )
+
+    return f, ax

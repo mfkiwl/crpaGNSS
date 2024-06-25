@@ -63,17 +63,18 @@ def geoplot(lat, lon, tiles="satellite", fig=None, ax=None, figsize=None, plot_i
             fig = plt.figure(figsize=figsize)
         ax = fig.add_subplot(projection=img.crs)
 
-    data_crs = ccrs.PlateCarree()
-    extent, radius = __compute_multiple_coordinate_extent(lons=lon, lats=lat)
+        # data_crs = ccrs.PlateCarree()
+        extent, radius = __compute_multiple_coordinate_extent(lons=lon, lats=lat)
 
-    # auto-calculate scale
-    scale = int(120 / np.log(radius))
-    scale = (scale < 20) and scale or 19
+        # auto-calculate scale
+        scale = int(120 / np.log(radius))
+        scale = (scale < 20) and scale or 19
 
-    ax.set_extent(extent)  # set extents
-    ax.add_image(img, int(scale))  # add OSM with zoom specification
+        ax.set_extent(extent)  # set extents
+        ax.add_image(img, int(scale))  # add OSM with zoom specification
 
     # add site
+    data_crs = ccrs.PlateCarree()
     ax.scatter(lon, lat, transform=data_crs, **kwargs)
     if plot_init_pos:
         ax.scatter(lon[0], lat[0], transform=data_crs, color="limegreen", label="Initial Position", s=200, marker="*")
@@ -98,7 +99,8 @@ def __compute_multiple_coordinate_extent(lons, lats):
     pairs = [(lon, lat) for lon, lat in zip(lons, lats)]
     bounding_box = BoundingBox(pairs)
 
-    buffer = 0.5 * bounding_box.height  # add 15% buffer
+    # buffer = 0.05 * bounding_box.height  # add 15% buffer
+    buffer = 0.2 * bounding_box.height
 
     min_y = bounding_box.min_point.y - buffer
     max_y = bounding_box.max_point.y + buffer
@@ -200,7 +202,9 @@ class Geoplot:
     #     label       str     label for legend
     #     marker_size double  desired relative marker size
     #
-    def plot(self, lat: np.ndarray = None, lon: np.ndarray = None, alt: np.ndarray = None, time: np.ndarray = None, **kwargs):
+    def plot(
+        self, lat: np.ndarray = None, lon: np.ndarray = None, alt: np.ndarray = None, time: np.ndarray = None, **kwargs
+    ):
         if not isinstance(lat, np.ndarray):
             lat = np.array([lat], dtype=np.double)
             lon = np.array([lon], dtype=np.double)
@@ -281,7 +285,9 @@ class Geoplot:
                     ]
                 ).T
                 LLAT = np.vstack((LLAT, temp))
-                self._sources = np.append(self._sources, np.repeat([self._data[f"label{i}"]], self._data[f"lat{i}"].shape[0]))
+                self._sources = np.append(
+                    self._sources, np.repeat([self._data[f"label{i}"]], self._data[f"lat{i}"].shape[0])
+                )
 
         # generate dataframe
         self._df = pd.DataFrame(LLAT, columns=["lat", "lon", "alt", "time", "size"])

@@ -96,11 +96,6 @@ class VectorProcess:
         self.__cn0_I_buf_prev = None
         self.__cn0_Q_buf = np.zeros((self.__cn0.size, self.__max_cn0_count))
 
-        # # init PLLs
-        # self.__pll_bw = config.pll_bw
-        # self.__pll_x = np.vstack((np.zeros(self.__num_sv), self.__y_hat_old[self.__num_sv :], np.zeros(self.__num_sv)))
-        # self.__pll_P = np.tile(np.diag([0.1, 10.0, 1.0]), (1, 1, self.__num_sv))
-
         # dynamic model init
         self.__init_dynamic_model(config)
 
@@ -142,12 +137,12 @@ class VectorProcess:
             self.__rx_clk_bias = self.__x[15]
             self.__rx_clk_drift = self.__x[16]
         elif self.__order == 2:  #! constant velocity
-            self.__rx_pos = self.__x[:3]
+            self.__rx_pos = self.__x[0:3]
             self.__rx_vel = self.__x[3:6]
             self.__rx_clk_bias = self.__x[6]
             self.__rx_clk_drift = self.__x[7]
         elif self.__order == 3:  #! constant acceleration
-            self.__rx_pos = self.__x[:3]
+            self.__rx_pos = self.__x[0:3]
             self.__rx_vel = self.__x[3:6]
             self.__rx_clk_bias = self.__x[9]
             self.__rx_clk_drift = self.__x[10]
@@ -174,7 +169,9 @@ class VectorProcess:
 
         # apply corrections
         if self.__order == 1:  #! imu
-            p0, p1, p2, p3 = 1, *(-self.__x[:3] / 2)
+            self.__rx_pos -= self.__x[0:3]
+            self.__rx_vel -= self.__x[3:6]
+            p0, p1, p2, p3 = 1, *(-self.__x[6:9] / 2.0)
             q0, q1, q2, q3 = self.__q_b_e
             self.__q_b_e = np.array(
                 [
@@ -185,15 +182,10 @@ class VectorProcess:
                 ]
             )
             self.__C_b_e = quat2dcm(self.__q_b_e)
-            self.__rx_vel -= self.__x[3:6]
-            self.__rx_pos -= self.__x[6:9]
-            # self.__acc_bias += self.__x[9:12]
-            # self.__gyr_bias += self.__x[12:15]
             self.__acc_bias = self.__x[9:12]
             self.__gyr_bias = self.__x[12:15]
             self.__rx_clk_bias = self.__x[15]
             self.__rx_clk_drift = self.__x[16]
-            # self.__x[:15] = np.zeros(15)
             self.__x[:9] = np.zeros(9)
         elif self.__order == 2:  #! constant velocity
             self.__rx_pos = self.__x[:3]
@@ -305,48 +297,15 @@ class VectorProcess:
 
         # calculate discriminators
         self.__phase_err = pll_atan_normalized(self.__corr.IP, self.__corr.QP)
-        self.__freq_err = fll_atan2_normalized(self.__corr.ip1, self.__corr.ip2, self.__corr.qp1, self.__corr.qp2, self.__T)
+        self.__freq_err = fll_atan2_normalized(
+            self.__corr.ip1, self.__corr.ip2, self.__corr.qp1, self.__corr.qp2, self.__T
+        )
         self.__chip_err = dll_nceml_normalized(self.__corr.IE, self.__corr.QE, self.__corr.IL, self.__corr.QL)
 
         # calculate discriminator variances
         self.__phase_var = pll_variance(self.__cn0, self.__T)
         self.__freq_var = fll_variance(self.__cn0, self.__T)
         self.__chip_var = dll_variance(self.__cn0, self.__T, self.__tap_spacing)
-
-    # def pll(self, vfll_err: float, x: np.ndarray, P: np.ndarray):
-    #     phase_err, phase_var, freq_var, T, qp = self.__phase_err, self.__phase_var, self.__freq_var, self.__T, self.__pll_bw
-
-    #     A = np.array(
-    #         [
-    #             [1.0, T, T * T / 2],
-    #             [0.0, 1.0, T],
-    #             [0.0, 0.0, 1.0],
-    #         ],
-    #     )
-    #     C = np.array(
-    #         [
-    #             [1.0, 0.0, 0.0],
-    #             [0.0, 1.0, 0.0],
-    #         ],
-    #     )
-    #     Q = np.array(
-    #         [
-    #             [qp * T**5 / 20, qp * T**4 / 8, qp * T**3 / 6],
-    #             [qp * T**4 / 8, qp * T**3 / 3, qp * T**2 / 2],
-    #             [qp * T**3 / 6, qp * T**2 / 2, qp * T],
-    #         ],
-    #     )
-    #     R = np.diag(np.array([phase_var, freq_var]))
-    #     dy = np.array([phase_err, vfll_err])
-
-    #     # kalman filter PLL
-    #     x = A @ x
-    #     P = A @ P @ A.T + Q
-    #     K = P @ C.T @ inv(C @ P @ C.T + R)
-    #     P = (I3 - K @ C) @ P
-    #     x += K @ dy
-
-    #     return x, P
 
     ############################################* INIT *############################################
 
@@ -383,7 +342,9 @@ class VectorProcess:
 
             # error state
             self.__x = np.block([np.zeros(15), config.clock_bias, config.clock_drift])
-            self.__P = np.diag(np.block([0.03 * ONE3, 0.301 * ONE3, 5.01 * ONE3, 5e-2 * ONE3, 1e-3 * ONE3, 5.01, 0.301]) ** 2)
+            self.__P = np.diag(
+                np.block([0.03 * ONE3, 0.301 * ONE3, 5.01 * ONE3, 5e-2 * ONE3, 1e-3 * ONE3, 5.01, 0.301]) ** 2
+            )
             self.__I = np.eye(17)
 
         elif config.order == 2:  #! constant velocity
@@ -452,7 +413,7 @@ class VectorProcess:
 
         # convert to DCM and euler angles
         C_new = quat2dcm(q_new)
-        C_avg = quat2dcm((q_old + self.__q_b_e) / 2.0)
+        C_avg = quat2dcm((q_old + q_new) / 2.0)
 
         # (Groves 5.85) specific force transformation body-to-ECEF
         f_ib_e = C_avg @ f_ib_b
@@ -495,9 +456,9 @@ class VectorProcess:
 
             self.__A = np.block(
                 [
-                    [F11, Z33, Z33, Z33, F15, Z32],
-                    [F21, F22, F23, F24, F25, Z32],
-                    [F31, F32, I3, F34, F35, Z32],
+                    [I3, F32, F31, F34, F35, Z32],
+                    [F23, F22, F21, F24, F25, Z32],
+                    [Z33, Z33, F11, Z33, F15, Z32],
                     [Z33, Z33, Z33, I3, Z33, Z32],
                     [Z33, Z33, Z33, Z33, I3, Z32],
                     [Z23, Z23, Z23, Z23, Z23, clk_f],
@@ -529,8 +490,8 @@ class VectorProcess:
             * 1.1
             * np.array(
                 [
-                    [self.__Sb * T + self.__Sd / 3 * T**3, self.__Sd / 2 * T**2],
-                    [self.__Sd / 2 * T**2, self.__Sd * T],
+                    [self.__Sb * T + self.__Sd / 3.0 * T**3, self.__Sd / 2.0 * T**2],
+                    [self.__Sd / 2.0 * T**2, self.__Sd * T],
                 ]
             )
         )
@@ -558,19 +519,19 @@ class VectorProcess:
 
             self.__Q = np.block(
                 [
-                    [Q11, Q21.T, Q31.T, Z33, Q15, Z32],
-                    [Q21, Q22, Q32.T, Q24, Q25, Z32],
-                    [Q31, Q32, Q33, Q34, Q35, Z32],
-                    [Z33, Q24, Q34.T, Q44, Z33, Z32],
-                    [Q15, Q52, Q32.T, Z33, Q55, Z32],
+                    [Q33, Q32.T, Q31.T, Q34, Q35, Z32],
+                    [Q32.T, Q22, Q21, Q24, Q25, Z32],
+                    [Q31.T, Q21.T, Q11, Z33, Q15, Z32],
+                    [Q34.T, Q24, Z33, Q44, Z33, Z32],
+                    [Q32.T, Q52, Q15, Z33, Q55, Z32],
                     [Z23, Z23, Z23, Z23, Z23, clk_q],
                 ]
             )
 
         elif self.__order == 2:  #! constant velocity
-            xyz_pp = self.__Sxyz * T**3 * I3 / 3
+            xyz_pp = self.__Sxyz * T**3 * I3 / 3.0
             xyz_vv = self.__Sxyz * T * I3
-            xyz_pv = self.__Sxyz * T**2 * I3 / 3
+            xyz_pv = self.__Sxyz * T**2 * I3 / 3.0
             self.__Q = np.block(
                 [
                     [xyz_pp, xyz_pv, Z32],
@@ -580,12 +541,12 @@ class VectorProcess:
             )
 
         elif self.__order == 3:  #! constant acceleration
-            xyz_pp = self.__Sxyz * T**5 / 20 * I3
-            xyz_vv = self.__Sxyz * T**3 / 3 * I3
+            xyz_pp = self.__Sxyz * T**5 / 20.0 * I3
+            xyz_vv = self.__Sxyz * T**3 / 3.0 * I3
             xyz_aa = self.__Sxyz * T * I3
-            xyz_pv = self.__Sxyz * T**4 / 8 * I3
-            xyz_pa = self.__Sxyz * T**3 / 6 * I3
-            xyz_va = self.__Sxyz * T**2 / 2 * I3
+            xyz_pv = self.__Sxyz * T**4 / 8.0 * I3
+            xyz_pa = self.__Sxyz * T**3 / 6.0 * I3
+            xyz_va = self.__Sxyz * T**2 / 2.0 * I3
             self.__Q = np.block(
                 [
                     [xyz_pp, xyz_pv, xyz_pa, Z32],
@@ -604,8 +565,8 @@ class VectorProcess:
         if self.__order == 1:  #! imu
             self.__C = np.block(
                 [
-                    [z, z, -u, z, z, o1, z1],
-                    [z, -u, -w, z, z, z1, o1],
+                    [-u, z, z, z, z, o1, z1],
+                    [-w, -u, z, z, z, z1, o1],
                 ]
             )
         elif self.__order == 2:  #! constant velocity
