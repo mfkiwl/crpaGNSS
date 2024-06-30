@@ -71,9 +71,9 @@ def pll_ddq_normalized(IP: float, QP: float) -> float:
 # * === dll_variance ===
 @njit(cache=True, fastmath=True)
 def dll_variance(CN0: float, T: float, D: float) -> float:
-    # tmp = 1.0 / (CN0 * T)
-    # return 0.25 * D * tmp * (1.0 + tmp)
-    return 1.0 / (2.0 * T**2 * CN0**2) + 1.0 / (4.0 * T * CN0)
+    tmp = 1.0 / (CN0 * T)
+    return 0.25 * D * tmp * (1.0 + tmp)
+    # return 1.0 / (2.0 * T**2 * CN0**2) + 1.0 / (4.0 * T * CN0)
 
 
 # * === fll_variance ===

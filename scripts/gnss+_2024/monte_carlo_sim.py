@@ -38,16 +38,14 @@ if __name__ == "__main__":
 
                 for attenuation in conf["mc_params"]["attenuation"]:
                     params["attenuation"] = attenuation
-                    dump_path = (
-                        RESULTS_PATH / f"{scenario}" / f"{n_ant}_element" / f"{imu_model}_imu" / f"{attenuation}_dB"
-                    )
+                    dump_path = RESULTS_PATH / f"{scenario}2" / f"{n_ant}_element" / f"{imu_model}_imu" / f"{attenuation}_dB"
                     prompt_str = (
                         f"[\u001b[31;1mcharlizard\u001b[0m] Running {scenario.upper()} - {n_ant} ELEMENT - "
                         + f"{imu_model.upper()} IMU - {attenuation} dB "
                     )
 
                     # run in parallel
-                    with pool.Pool(processes=cpu_count()) as p:
+                    with pool.Pool(processes=15) as p:
                         args = [(params, i, True, False, True, dump_path) for i in range(conf["mc_params"]["n_runs"])]
                         for b in tqdm(
                             p.imap(run_rcvr, args),

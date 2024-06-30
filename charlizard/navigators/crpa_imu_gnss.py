@@ -595,6 +595,9 @@ class CRPA_IMU_GNSS:
         )
         F_21_21t = F21 @ F21.T
         F_21_C = F21 @ C
+        # T_r_p[T_r_p != 0.0] = 1.0 / T_r_p[T_r_p != 0.0]
+        # T_r_p[T_r_p != 0.0] = 1.0
+        T_r_p = np.eye(3)
 
         clk_q = LIGHT_SPEED**2 * np.array([[S_b * dt + S_d / 3.0 * dt**3, S_d / 2.0 * dt**2], [S_d / 2.0 * dt**2, S_d * dt]])
 

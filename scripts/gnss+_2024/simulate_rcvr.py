@@ -24,7 +24,9 @@ import matplotlib.pyplot as plt
 
 import charlizard.models.bpsk_correlator as bpsk
 import charlizard.models.crpa_gain_pattern as gain
-import charlizard.navigators.crpa_imu_gnss as cig
+
+# import charlizard.navigators.crpa_imu_gnss as cig
+import charlizard.navigators.crpa_imu_gnss_ecef as cig
 from charlizard.plotting.geoplot import geoplot, Geoplot
 from charlizard.plotting.plot_window import plotWindow
 
@@ -93,9 +95,11 @@ def generate_imu_noise(
     elif model.casefold() == "consumer":
         M_gyr, M_acc = nt.euler2dcm(np.random.randn(3) * 0.1 / R2D).T, nt.euler2dcm(np.random.randn(3) * 0.1 / R2D).T
         b_gyr, b_acc = np.random.randn(3) * 1.0 / R2D, np.random.randn(3) * 0.1
+        # M_gyr, M_acc = np.eye(3), np.eye(3)
+        # b_gyr, b_acc = np.ones(3) * 0.5 / R2D, np.ones(3) * 0.05
 
-    # return (meas_gyr @ M_gyr + b_gyr + n_gyr, meas_acc @ M_acc + b_acc + n_acc)
-    return meas_gyr + n_gyr, meas_acc + n_acc
+    return (meas_gyr @ M_gyr + b_gyr + n_gyr, meas_acc @ M_acc + b_acc + n_acc)
+    # return meas_gyr + n_gyr, meas_acc + n_acc
     # return meas_gyr, meas_acc
 
 
@@ -139,9 +143,13 @@ def initialize_rcvr(
     pos = nt.enu2lla(np.random.randn(3) * init_pva_err[0:3], lla0) * LLA_R2D
     vel = nt.ecef2enuv(data["rcvr_vel"], lla0) + np.random.randn(3) * init_pva_err[3:6]
     att = data["rcvr_att"] + np.random.randn(3) * init_pva_err[6:9]
+    # pos = nt.enu2lla(init_pva_err[0:3] * np.array([1.0, -1.0, -1.0]), lla0) * LLA_R2D
+    # vel = nt.ecef2enuv(data["rcvr_vel"], lla0) + init_pva_err[3:6] * np.array([-1.0, 1.0, 1.0])
+    # att = data["rcvr_att"] + init_pva_err[6:9] * np.array([1.0, 1.0, -1.0])
 
     innov_std = 3.0 if attenuation <= 10.0 else (2.0 if attenuation <= 25.0 else (1.5 if attenuation <= 30 else 1.0))
     cn0 = (data["sv_cn0"] - attenuation) if n_ant == 1 else (data["sv_cn0"] - attenuation + 10 * np.log10(n_ant))
+    # cn0 = data["sv_cn0"] - attenuation
 
     # create config
     n_sv = cn0.size
@@ -203,6 +211,8 @@ def run_rcvr(args):
     imu_dt = 1.0 / params["f_imu"]
     rcvr_dt = 1.0 / params["f_rcvr"]
 
+    # N_main = int(N_main / 4)
+
     # correlator model inputs
     range_nco = np.zeros((n_sv, N_imu * N_int))
     range_rate_nco = np.zeros(range_nco.shape)
@@ -233,12 +243,23 @@ def run_rcvr(args):
         "clock_bias_std_filter": np.zeros(N_main),
         "clock_drift_std_filter": np.zeros(N_main),
     }
+    # results["cn0"][0, :] = conf.cn0
+    # results["lla"][0, :] = conf.pos
+    # results["velocity"][0, :] = conf.vel
+    # results["attitude"][0, :] = conf.att
+    # results["position_error"][0, :] = np.array([1.0, -1.0, -1.5])
+    # results["velocity_error"][0, :] = np.array([-0.05, 0.05, 0.1])
+    # results["attitude_error"][0, :] = np.array([2.0, 2.0, -15.0])
+    # results["position_error"][0, :] = np.array([2.0, -2.0, -3.5])
+    # results["velocity_error"][0, :] = np.array([-0.1, 0.1, 0.12])
+    # results["attitude_error"][0, :] = np.array([4.0, 4.0, -20.0])
 
     # ----- main loop ------------------------------------------------------------------------------
     h5_idx = 0
     imu_idx = 0
     for i in tqdm(
         range(N_main),
+        # range(N_main - 1),
         desc="[\u001b[31;1mcharlizard\u001b[0m] running receiver ",
         ascii=".>#",
         bar_format="{desc}{percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{rate_fmt}]",
@@ -345,12 +366,36 @@ def run_rcvr(args):
         results["clock_bias_error"][i] = results["clock_bias"][i] - meas["bias"][h5_arr_idx[-1]]
         results["clock_drift_error"][i] = results["clock_drift"][i] - meas["drift"][h5_arr_idx[-1]]
         results["cn0"][i, :] = rcvr.extract_cn0()
+        # lla_r = data["rcvr_lla"][-1, :] / LLA_R2D
+        # (
+        #     results["lla"][i + 1, :],
+        #     results["velocity"][i + 1, :],
+        #     results["attitude"][i + 1, :],
+        #     results["clock_bias"][i + 1],
+        #     results["clock_drift"][i + 1],
+        # ) = rcvr.extract_states()
+        # (
+        #     results["position_std_filter"][i + 1, :],
+        #     results["velocity_std_filter"][i + 1, :],
+        #     results["attitude_std_filter"][i + 1, :],
+        #     results["clock_bias_std_filter"][i + 1],
+        #     results["clock_drift_std_filter"][i + 1],
+        # ) = rcvr.extract_stds()
+        # results["dop"][i + 1, :] = rcvr.extract_dops()
+        # results["position"][i + 1, :] = nt.lla2enu(results["lla"][i + 1, :] / LLA_R2D, lla0)
+        # results["position_error"][i + 1, :] = nt.lla2enu(results["lla"][i + 1, :] / LLA_R2D, lla_r)
+        # results["velocity_error"][i + 1, :] = results["velocity"][i + 1, :] - nt.ecef2enuv(data["rcvr_vel"][-1, :], lla_r)
+        # results["attitude_error"][i + 1, :] = results["attitude"][i + 1, :] - data["rcvr_att"][-1, :]
+        # results["clock_bias_error"][i + 1] = results["clock_bias"][i + 1] - meas["bias"][h5_arr_idx[-1]]
+        # results["clock_drift_error"][i + 1] = results["clock_drift"][i + 1] - meas["drift"][h5_arr_idx[-1]]
+        # results["cn0"][i + 1, :] = rcvr.extract_cn0()
 
     # ----- done! ----------------------------------------------------------------------------------
     if save:
         nt.io.ensure_exist(path)
         dump_filename = path / f"run{run_idx}"
         np.savez_compressed(dump_filename, **results)
+        # np.savez_compressed(path, **results)
 
     if return_lla:
         data = h5.load_slice(np.arange(0, n, 1), ["rcvr_lla"])
@@ -362,18 +407,23 @@ def run_rcvr(args):
 #! -------------------------------------------------------------------------------------------------
 if __name__ == "__main__":
     params = {
-        "scenario": "dynamic",
+        "scenario": "static",
         "imu_model": "consumer",
         "clock_model": "high_quality_tcxo",
-        "n_ant": 2,
-        "attenuation": 25.0,
-        "init_pva_err": np.zeros(9),  # [3.0, 3.0, 5.0, 0.1, 0.1, 0.15, 3.0, 3.0, 10.0],
+        "n_ant": 4,
+        "attenuation": 20.0,
+        # "init_pva_err": np.array([2.0, 2.0, 3.5, 0.1, 0.1, 0.15, 4.0, 4.0, 20.0]),
+        # "init_pva_err": np.array([1.0, 1.0, 1.5, 0.05, 0.05, 0.1, 2.0, 2.0, 15.0]),
+        # "init_pva_err": np.zeros(9),
+        "init_pva_err": np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 15.0]),
         "f_sim": 1000,
         "f_imu": 100,
         "f_rcvr": 50,
     }
-    path = RESULTS_PATH / f"{params['scenario']}" / f"{params['attenuation']}"
-    args = (params, 0, False, True, False, path)
+    # path = RESULTS_PATH / f"{params['scenario']}" / f"{params['attenuation']}"
+    path = RESULTS_PATH / "single_runs" / "static_4element_consumer_20.0dB"
+    # args = (params, 0, False, True, False, path)
+    args = (params, 0, True, True, False, path)
     results, data = run_rcvr(args)
     print("done!")
 

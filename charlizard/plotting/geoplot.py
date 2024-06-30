@@ -1,15 +1,13 @@
 """
-|==================================== navlib/plot/geoplot.py ======================================|
+|========================================== skyplot.py ============================================|
 |                                                                                                  |
 |  Property of Daniel Sturdivant. Unauthorized copying of this file via any medium would be        |
 |  super sad and unfortunate for me. Proprietary and confidential.                                 |
 |                                                                                                  |
 |--------------------------------------------------------------------------------------------------| 
 |                                                                                                  |
-|  @file     navlib/plot/geoplot.py                                                                |
+|  @file     charlizard/plotting/geoplot.py                                                        |
 |  @brief    Plot methods for map based figures.                                                   |
-|  @ref      Principles of GNSS, Inertial, and Multisensor Integrated Navigation Systems           |
-|              - (2013) Paul D. Groves                                                             |
 |  @author   Daniel Sturdivant <sturdivant20@gmail.com>                                            | 
 |  @date     December 2023                                                                         |
 |                                                                                                  |
@@ -98,9 +96,11 @@ def geoplot(lat, lon, tiles="satellite", fig=None, ax=None, figsize=None, plot_i
 def __compute_multiple_coordinate_extent(lons, lats):
     pairs = [(lon, lat) for lon, lat in zip(lons, lats)]
     bounding_box = BoundingBox(pairs)
-
-    # buffer = 0.05 * bounding_box.height  # add 15% buffer
-    buffer = 0.2 * bounding_box.height
+    if bounding_box.min_point == bounding_box.max_point:
+        buffer = 2e-4
+    else:
+        buffer = 0.05 * bounding_box.height  # add 15% buffer
+        # buffer = 0.2 * bounding_box.height
 
     min_y = bounding_box.min_point.y - buffer
     max_y = bounding_box.max_point.y + buffer
@@ -202,9 +202,7 @@ class Geoplot:
     #     label       str     label for legend
     #     marker_size double  desired relative marker size
     #
-    def plot(
-        self, lat: np.ndarray = None, lon: np.ndarray = None, alt: np.ndarray = None, time: np.ndarray = None, **kwargs
-    ):
+    def plot(self, lat: np.ndarray = None, lon: np.ndarray = None, alt: np.ndarray = None, time: np.ndarray = None, **kwargs):
         if not isinstance(lat, np.ndarray):
             lat = np.array([lat], dtype=np.double)
             lon = np.array([lon], dtype=np.double)
@@ -285,9 +283,7 @@ class Geoplot:
                     ]
                 ).T
                 LLAT = np.vstack((LLAT, temp))
-                self._sources = np.append(
-                    self._sources, np.repeat([self._data[f"label{i}"]], self._data[f"lat{i}"].shape[0])
-                )
+                self._sources = np.append(self._sources, np.repeat([self._data[f"label{i}"]], self._data[f"lat{i}"].shape[0]))
 
         # generate dataframe
         self._df = pd.DataFrame(LLAT, columns=["lat", "lon", "alt", "time", "size"])

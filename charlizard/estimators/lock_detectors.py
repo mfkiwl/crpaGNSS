@@ -73,7 +73,7 @@ def cn0_m2m4_estimate(IPs: np.ndarray, QPs: np.ndarray, T: float) -> float:
     return cn0_dB, cn0_pow
 
 
-# @njit(cache=True, fastmath=True)
+@njit(cache=True, fastmath=True)
 def cn0_m2m4_estimate2d(IPs: np.ndarray, QPs: np.ndarray, T: float) -> float:
     # 2nd and 4th moments
     M = IPs.shape[0]
